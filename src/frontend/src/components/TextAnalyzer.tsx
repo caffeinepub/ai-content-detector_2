@@ -4,14 +4,14 @@ import { cn } from "@/lib/utils";
 import { AlertCircle, Loader2, Scan } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useState } from "react";
-import type { ScanRecord } from "../backend.d";
+import type { EnrichedScanRecord } from "../hooks/useQueries";
 import { LoadingState } from "./LoadingState";
 import { ResultCard } from "./ResultCard";
 
 interface TextAnalyzerProps {
   userId: string;
   isQuotaReached: boolean;
-  onAnalyze: (text: string) => Promise<ScanRecord>;
+  onAnalyze: (text: string) => Promise<EnrichedScanRecord>;
   isLoading: boolean;
   isActorLoading?: boolean;
   error: Error | null;
@@ -26,7 +26,7 @@ export function TextAnalyzer({
   error,
 }: TextAnalyzerProps) {
   const [text, setText] = useState("");
-  const [result, setResult] = useState<ScanRecord | null>(null);
+  const [result, setResult] = useState<EnrichedScanRecord | null>(null);
   const [analyzedText, setAnalyzedText] = useState("");
 
   const handleAnalyze = async () => {

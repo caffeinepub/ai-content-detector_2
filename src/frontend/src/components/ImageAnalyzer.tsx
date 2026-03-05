@@ -10,7 +10,7 @@ import {
 import { AlertCircle, Loader2, LogIn, Scan } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useState } from "react";
-import type { ScanRecord } from "../backend.d";
+import type { EnrichedScanRecord } from "../hooks/useQueries";
 import { DropZone } from "./DropZone";
 import { LoadingState } from "./LoadingState";
 import { ResultCard } from "./ResultCard";
@@ -22,7 +22,8 @@ interface ImageAnalyzerProps {
     contentType: string,
     filename: string,
     snippet: string,
-  ) => Promise<ScanRecord>;
+    file?: File,
+  ) => Promise<EnrichedScanRecord>;
   isLoading: boolean;
   isActorLoading?: boolean;
   error: Error | null;
@@ -42,7 +43,7 @@ export function ImageAnalyzer({
 }: ImageAnalyzerProps) {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [result, setResult] = useState<ScanRecord | null>(null);
+  const [result, setResult] = useState<EnrichedScanRecord | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
 
   const handleFileSelect = (selected: File) => {
@@ -68,7 +69,7 @@ export function ImageAnalyzer({
     }
 
     try {
-      const res = await onAnalyze("image", file.name, file.name);
+      const res = await onAnalyze("image", file.name, file.name, file);
       setResult(res);
     } catch {
       // error handled by parent

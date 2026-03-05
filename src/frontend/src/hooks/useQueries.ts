@@ -1,6 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ScanRecord } from "../backend.d";
+import type { SignalScores } from "../utils/detector";
+import { detectFileAsync, detectText } from "../utils/detector";
 import { useActor } from "./useActor";
+
+/** ScanRecord extended with per-signal scores (frontend only, not persisted to backend) */
+export interface EnrichedScanRecord extends ScanRecord {
+  signalScores: SignalScores;
+}
+
+/** Overrides the backend's placeholder scores with locally-computed ones. */
+function patchRecord(
+  record: ScanRecord,
+  detection: ReturnType<typeof detectText>,
+): EnrichedScanRecord {
+  return {
+    ...record,
+    aiScore: BigInt(detection.aiScore),
+    humanScore: BigInt(detection.humanScore),
+    verdict: detection.verdict,
+    highlights: detection.highlights,
+    explanation: detection.explanation,
+    signalScores: detection.signalScores,
+  };
+}
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
 export const queryKeys = {
@@ -39,7 +62,7 @@ export function useAnalyzeText(userId: string) {
   const { actor, isFetching } = useActor();
   const queryClient = useQueryClient();
 
-  return useMutation<ScanRecord, Error, { text: string }>({
+  return useMutation<EnrichedScanRecord, Error, { text: string }>({
     mutationFn: async ({ text }) => {
       if (isFetching)
         throw new Error(
@@ -49,7 +72,9 @@ export function useAnalyzeText(userId: string) {
         throw new Error(
           "Backend connection unavailable. Please refresh the page.",
         );
-      return actor.analyzeText(userId, text);
+      const detection = detectText(text);
+      const record = await actor.analyzeText(userId, text);
+      return patchRecord(record, detection);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -68,11 +93,11 @@ export function useAnalyzeFile(userId: string) {
   const queryClient = useQueryClient();
 
   return useMutation<
-    ScanRecord,
+    EnrichedScanRecord,
     Error,
-    { contentType: string; filename: string; snippet: string }
+    { contentType: string; filename: string; snippet: string; file?: File }
   >({
-    mutationFn: async ({ contentType, filename, snippet }) => {
+    mutationFn: async ({ contentType, filename, snippet, file }) => {
       if (isFetching)
         throw new Error(
           "Still connecting to the backend. Please try again in a moment.",
@@ -81,7 +106,14 @@ export function useAnalyzeFile(userId: string) {
         throw new Error(
           "Backend connection unavailable. Please refresh the page.",
         );
-      return actor.analyzeFile(userId, contentType, filename, snippet);
+      const detection = await detectFileAsync(filename, snippet, file);
+      const record = await actor.analyzeFile(
+        userId,
+        contentType,
+        filename,
+        snippet,
+      );
+      return patchRecord(record, detection);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
