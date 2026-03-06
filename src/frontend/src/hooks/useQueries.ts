@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { backendInterface } from "../backend";
 import type { UserProfile } from "../backend.d";
 import type { ScanRecord } from "../backend.d";
-import type { SignalScores } from "../utils/detector";
+import type { ModelVotes, SignalScores } from "../utils/detector";
 import { detectFileAsync, detectText } from "../utils/detector";
 import {
   cacheScanScores,
@@ -33,9 +33,10 @@ async function waitForActorReady(
   throw new Error("__actor_unavailable__");
 }
 
-/** ScanRecord extended with per-signal scores (frontend only, not persisted to backend) */
+/** ScanRecord extended with per-signal scores and model votes (frontend only, not persisted to backend) */
 export interface EnrichedScanRecord extends ScanRecord {
   signalScores: SignalScores;
+  modelVotes?: ModelVotes;
 }
 
 /** Overrides the backend's placeholder scores with locally-computed ones. */
@@ -51,6 +52,7 @@ function patchRecord(
     highlights: detection.highlights,
     explanation: detection.explanation,
     signalScores: detection.signalScores,
+    modelVotes: detection.modelVotes,
   };
 }
 
@@ -186,6 +188,7 @@ export function useHistory(userId: string) {
       return records.map(normalizeHistoryRecord);
     },
     enabled: !!actor && !isFetching,
+    staleTime: 30_000,
   });
 }
 
@@ -199,6 +202,7 @@ export function useDailyCount(userId: string) {
       return actor.getDailyCount(userId);
     },
     enabled: !!actor && !isFetching,
+    staleTime: 30_000,
   });
 }
 
@@ -246,7 +250,13 @@ export function useAnalyzeText(userId: string) {
       });
       return enriched;
     },
-    onSuccess: () => {
+    onSuccess: (newRecord) => {
+      // 1. Optimistically prepend the new record so the UI updates instantly
+      queryClient.setQueryData<EnrichedScanRecord[]>(
+        queryKeys.history(userId),
+        (old) => [newRecord, ...(old ?? [])],
+      );
+      // 2. Invalidate in background to sync with backend
       void queryClient.invalidateQueries({
         queryKey: queryKeys.history(userId),
       });
@@ -311,7 +321,13 @@ export function useAnalyzeFile(userId: string) {
       });
       return enriched;
     },
-    onSuccess: () => {
+    onSuccess: (newRecord) => {
+      // 1. Optimistically prepend the new record so the UI updates instantly
+      queryClient.setQueryData<EnrichedScanRecord[]>(
+        queryKeys.history(userId),
+        (old) => [newRecord, ...(old ?? [])],
+      );
+      // 2. Invalidate in background to sync with backend
       void queryClient.invalidateQueries({
         queryKey: queryKeys.history(userId),
       });

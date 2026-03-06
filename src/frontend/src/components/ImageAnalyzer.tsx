@@ -7,13 +7,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AlertCircle, Loader2, LogIn, Scan } from "lucide-react";
-import { AnimatePresence } from "motion/react";
+import { cn } from "@/lib/utils";
+import { AlertCircle, Film, Image, Loader2, LogIn, Scan } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import type { EnrichedScanRecord } from "../hooks/useQueries";
+import { analyzeVideoFile } from "../utils/detector";
 import { DropZone } from "./DropZone";
 import { LoadingState } from "./LoadingState";
 import { ResultCard } from "./ResultCard";
+
+type AnalysisMode = "image" | "video";
 
 interface ImageAnalyzerProps {
   userId: string;
@@ -43,10 +47,23 @@ export function ImageAnalyzer({
   onLogin,
   onNavigateProfile,
 }: ImageAnalyzerProps) {
+  const [mode, setMode] = useState<AnalysisMode>("image");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [result, setResult] = useState<EnrichedScanRecord | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+
+  const handleModeChange = (newMode: AnalysisMode) => {
+    if (newMode === mode) return;
+    setMode(newMode);
+    // Clear state when switching modes
+    if (file) {
+      setFile(null);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+    setResult(null);
+  };
 
   const handleFileSelect = (selected: File) => {
     setFile(selected);
@@ -71,8 +88,23 @@ export function ImageAnalyzer({
     }
 
     try {
-      const res = await onAnalyze("image", file.name, file.name, file);
-      setResult(res);
+      if (mode === "video") {
+        // Run video analysis locally, then save via onAnalyze
+        const localResult = await analyzeVideoFile(file);
+        const res = await onAnalyze("video", file.name, file.name, file);
+        // Merge local detection scores into the returned record
+        setResult({
+          ...res,
+          aiScore: BigInt(localResult.aiScore),
+          humanScore: BigInt(localResult.humanScore),
+          verdict: localResult.verdict,
+          explanation: localResult.explanation,
+          signalScores: localResult.signalScores,
+        });
+      } else {
+        const res = await onAnalyze("image", file.name, file.name, file);
+        setResult(res);
+      }
     } catch {
       // error handled by parent
     }
@@ -83,14 +115,56 @@ export function ImageAnalyzer({
     handleClear();
   };
 
+  const isVideoMode = mode === "video";
+
   return (
     <>
       <div className="space-y-4">
+        {/* Mode toggle */}
+        <fieldset
+          data-ocid="detector.video_mode_toggle"
+          className="flex items-center gap-1 rounded-lg bg-muted p-1 w-full border-0 m-0 p-1"
+        >
+          <legend className="sr-only">Analysis mode</legend>
+          <button
+            type="button"
+            onClick={() => handleModeChange("image")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200",
+              mode === "image"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            aria-pressed={mode === "image"}
+          >
+            <Image className="h-3.5 w-3.5" />
+            Image
+          </button>
+          <button
+            type="button"
+            onClick={() => handleModeChange("video")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200",
+              mode === "video"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            aria-pressed={mode === "video"}
+          >
+            <Film className="h-3.5 w-3.5" />
+            Video
+          </button>
+        </fieldset>
+
         <AnimatePresence mode="wait">
           {isLoading ? (
             <LoadingState
               key="loading"
-              label="Analyzing image for AI patterns..."
+              label={
+                isVideoMode
+                  ? "Analyzing video for AI patterns..."
+                  : "Analyzing image for AI patterns..."
+              }
             />
           ) : result ? (
             <ResultCard
@@ -99,18 +173,39 @@ export function ImageAnalyzer({
               onNewScan={handleNewScan}
             />
           ) : (
-            <div key="input" className="space-y-3">
-              <DropZone
-                data-ocid="detector.image_dropzone"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                acceptLabel="JPG, PNG, WEBP, GIF"
-                icon="image"
-                onFileSelect={handleFileSelect}
-                selectedFile={file}
-                onClear={handleClear}
-                previewUrl={previewUrl}
-                disabled={isLoading}
-              />
+            <motion.div
+              key={`input-${mode}`}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18 }}
+              className="space-y-3"
+            >
+              {isVideoMode ? (
+                <DropZone
+                  data-ocid="detector.video_dropzone"
+                  accept="video/mp4,video/webm,video/quicktime,video/x-msvideo,video/x-matroska"
+                  acceptLabel="MP4, WEBM, MOV, AVI, MKV"
+                  icon="video"
+                  onFileSelect={handleFileSelect}
+                  selectedFile={file}
+                  onClear={handleClear}
+                  previewUrl={previewUrl}
+                  disabled={isLoading}
+                />
+              ) : (
+                <DropZone
+                  data-ocid="detector.image_dropzone"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  acceptLabel="JPG, PNG, WEBP, GIF"
+                  icon="image"
+                  onFileSelect={handleFileSelect}
+                  selectedFile={file}
+                  onClear={handleClear}
+                  previewUrl={previewUrl}
+                  disabled={isLoading}
+                />
+              )}
 
               {error && (
                 <div
@@ -136,7 +231,11 @@ export function ImageAnalyzer({
               )}
 
               <Button
-                data-ocid="detector.image_analyze_button"
+                data-ocid={
+                  isVideoMode
+                    ? "detector.video_analyze_button"
+                    : "detector.image_analyze_button"
+                }
                 onClick={handleAnalyze}
                 disabled={!file || isLoading || isQuotaReached}
                 className="w-full gap-2 font-semibold bg-teal text-primary-foreground hover:bg-teal/90"
@@ -147,6 +246,11 @@ export function ImageAnalyzer({
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Analyzing...
                   </>
+                ) : isVideoMode ? (
+                  <>
+                    <Film className="h-4 w-4" />
+                    Analyze Video
+                  </>
                 ) : (
                   <>
                     <Scan className="h-4 w-4" />
@@ -154,7 +258,7 @@ export function ImageAnalyzer({
                   </>
                 )}
               </Button>
-            </div>
+            </motion.div>
           )}
         </AnimatePresence>
       </div>
@@ -176,7 +280,7 @@ export function ImageAnalyzer({
             </DialogTitle>
             <DialogDescription>
               You need to log in to analyze files. Only authenticated users can
-              use the Image and Document analysis features.
+              use the Image/Video and Document analysis features.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-2">

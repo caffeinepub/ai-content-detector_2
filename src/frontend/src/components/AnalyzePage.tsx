@@ -1,5 +1,5 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileText, Image, TriangleAlert, Type, Zap } from "lucide-react";
+import { FileText, Film, TriangleAlert, Type, Zap } from "lucide-react";
 import type { ScanRecord } from "../backend.d";
 import type { EnrichedScanRecord } from "../hooks/useQueries";
 import { DocumentAnalyzer } from "./DocumentAnalyzer";
@@ -72,8 +72,8 @@ export function AnalyzePage({
               Analyze Content
             </h1>
             <p className="text-sm text-muted-foreground">
-              Detect whether text, images, or documents were created by AI.
-              Powered by advanced pattern recognition.
+              Detect whether text, images, videos, or documents were created by
+              AI. Powered by advanced pattern recognition.
             </p>
           </div>
 
@@ -127,8 +127,8 @@ export function AnalyzePage({
                 value="image"
                 className="flex items-center gap-1.5 text-xs font-medium rounded-md data-[state=active]:bg-background data-[state=active]:shadow-xs"
               >
-                <Image className="h-3.5 w-3.5" />
-                Image
+                <Film className="h-3.5 w-3.5" />
+                Image / Video
               </TabsTrigger>
               <TabsTrigger
                 data-ocid="analyze.document.tab"

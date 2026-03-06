@@ -1,12 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { FileText, Image, Upload, X } from "lucide-react";
+import { FileText, Film, Image, Upload, X } from "lucide-react";
 import { type ChangeEvent, type DragEvent, useRef, useState } from "react";
 
 interface DropZoneProps {
   accept: string;
   acceptLabel: string;
-  icon?: "file" | "image";
+  icon?: "file" | "image" | "video";
   onFileSelect: (file: File) => void;
   selectedFile: File | null;
   onClear: () => void;
@@ -61,7 +61,8 @@ export function DropZone({
     if (!disabled) inputRef.current?.click();
   };
 
-  const IconComponent = icon === "image" ? Image : FileText;
+  const IconComponent =
+    icon === "image" ? Image : icon === "video" ? Film : FileText;
 
   return (
     <div
@@ -99,6 +100,25 @@ export function DropZone({
                 src={previewUrl}
                 alt="Preview"
                 className="mx-auto max-h-48 rounded-lg object-contain"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onClear}
+                className="absolute right-0 top-0 h-7 w-7 rounded-full bg-background/80 hover:bg-destructive/10 hover:text-destructive"
+                aria-label="Remove file"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : previewUrl && icon === "video" ? (
+            <div className="relative">
+              <video
+                src={previewUrl}
+                className="mx-auto max-h-48 w-full rounded-lg object-contain"
+                controls
+                muted
               />
               <Button
                 type="button"

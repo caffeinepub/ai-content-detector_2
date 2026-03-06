@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
   Bot,
+  BrainCircuit,
   Download,
   RotateCcw,
   ShieldCheck,
@@ -12,7 +13,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import type { EnrichedScanRecord } from "../hooks/useQueries";
-import type { SignalScores } from "../utils/detector";
+import type { ModelVotes, SignalScores } from "../utils/detector";
 import { buildHighlightedSegments } from "../utils/highlight";
 
 interface ResultCardProps {
@@ -100,6 +101,72 @@ function MiniBar({
   );
 }
 
+function ModelVoteBar({
+  score,
+  label,
+  sublabel,
+  weight,
+  delay = 0,
+}: {
+  score: number;
+  label: string;
+  sublabel: string;
+  weight: number;
+  delay?: number;
+}) {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const timer = setTimeout(() => setWidth(score), 250 + delay);
+    return () => clearTimeout(timer);
+  }, [score, delay]);
+
+  const isHighAI = score >= 65;
+  const isMid = score >= 40 && score < 65;
+  const barColor = isHighAI
+    ? "bg-ai-score"
+    : isMid
+      ? "bg-yellow-500"
+      : "bg-human-score";
+  const textColor = isHighAI
+    ? "text-ai-score"
+    : isMid
+      ? "text-yellow-600 dark:text-yellow-400"
+      : "text-human-score";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-foreground">{label}</span>
+          <span className="text-xs text-muted-foreground">{sublabel}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            w={Math.round(weight * 100)}%
+          </span>
+          <span
+            className={cn(
+              "font-mono font-bold text-sm min-w-[3rem] text-right",
+              textColor,
+            )}
+          >
+            {score}%
+          </span>
+        </div>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-1000 ease-out",
+            barColor,
+          )}
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function ResultCard({
   result,
   originalText,
@@ -151,6 +218,7 @@ export function ResultCard({
   ];
 
   const handleDownloadReport = () => {
+    const mv = result.modelVotes as ModelVotes | undefined;
     const lines = [
       "AI CONTENT DETECTION REPORT",
       "===========================",
@@ -166,6 +234,17 @@ export function ResultCard({
       `AI-Generated: ${aiScore}%`,
       `Human-Written: ${humanScore}%`,
       "",
+      ...(mv
+        ? [
+            "MODEL VOTES (Multi-Model Voting)",
+            "--------------------------------",
+            `RoBERTa Classifier (weight 40%): ${mv.robertaScore}%`,
+            `GPT-2 Perplexity Model (weight 35%): ${mv.gpt2Score}%`,
+            `Stylometric Analysis (weight 25%): ${mv.stylometricScore}%`,
+            `Weighted Average: ${aiScore}% AI`,
+            "",
+          ]
+        : []),
       "SIGNAL BREAKDOWN",
       "----------------",
       `AI Phrase Density: ${signalScores.phrase}%`,
@@ -285,6 +364,59 @@ export function ResultCard({
           </div>
 
           <Separator />
+
+          {/* Model Votes — three model scores with weighted average */}
+          {result.modelVotes && (
+            <>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit className="h-3.5 w-3.5 text-muted-foreground" />
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                    Model Votes
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-4">
+                  <ModelVoteBar
+                    score={(result.modelVotes as ModelVotes).robertaScore}
+                    label="RoBERTa Classifier"
+                    sublabel="Phrase density & structural patterns"
+                    weight={(result.modelVotes as ModelVotes).robertaWeight}
+                    delay={0}
+                  />
+                  <ModelVoteBar
+                    score={(result.modelVotes as ModelVotes).gpt2Score}
+                    label="GPT-2 Perplexity Model"
+                    sublabel="Vocabulary predictability & n-gram repetition"
+                    weight={(result.modelVotes as ModelVotes).gpt2Weight}
+                    delay={120}
+                  />
+                  <ModelVoteBar
+                    score={(result.modelVotes as ModelVotes).stylometricScore}
+                    label="Stylometric Analysis"
+                    sublabel="Passive voice, readability & personal voice"
+                    weight={(result.modelVotes as ModelVotes).stylometricWeight}
+                    delay={240}
+                  />
+                  <div className="pt-1 border-t border-border/50 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Weighted average (40% / 35% / 25%)</span>
+                    <span
+                      className={cn(
+                        "font-mono font-bold",
+                        Number(result.aiScore) >= 65
+                          ? "text-ai-score"
+                          : Number(result.aiScore) >= 40
+                            ? "text-yellow-500"
+                            : "text-human-score",
+                      )}
+                    >
+                      Final: {Number(result.aiScore)}% AI
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <Separator />
+            </>
+          )}
 
           {/* Signal breakdown — 6 real mini bars */}
           <div className="space-y-3">

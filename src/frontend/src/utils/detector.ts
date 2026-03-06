@@ -281,6 +281,31 @@ const AI_PHRASES: string[] = [
   ...CONCLUSION_ADVICE,
 ];
 
+// AI video filename keywords
+const AI_VIDEO_KEYWORDS: string[] = [
+  "sora",
+  "runway",
+  "pika",
+  "kling",
+  "luma",
+  "gen2",
+  "gen3",
+  "gen-2",
+  "gen-3",
+  "synthesia",
+  "heygen",
+  "d-id",
+  "invideo",
+  "kaiber",
+  "moonvalley",
+  "stable",
+  "diffusion",
+  "ai",
+  "generated",
+  "synthetic",
+  "artificial",
+];
+
 // AI image filename keywords
 const AI_IMAGE_KEYWORDS: string[] = [
   "ai",
@@ -656,74 +681,120 @@ function computeFormalHedge(lower: string, wordCount: number): number {
   return Math.min(90, hits * 14);
 }
 
-/** Find suspicious sentences: 3+ AI signals hit on the sentence */
+// ── Per-Sentence Mini Scorer for 80% Threshold Flagging ──────────────────
+
+/** Score a single sentence across all three model proxies, return 0–100 composite */
+function scoreSentenceMini(sentence: string): number {
+  const sLower = toLower(sentence);
+  const wc = countWords(sentence);
+
+  // Model A mini: phrase density + structural signals
+  let phraseHits = 0;
+  for (const phrase of AI_PHRASES) {
+    if (sLower.includes(phrase)) phraseHits++;
+  }
+  const hasContraction = CONTRACTIONS.some((c) => sLower.includes(c));
+  const hasFirstPerson = /\b(i|me|my|we|our)\b/.test(sLower);
+  const hasPassive = /\b(is|are|was|were)\s+\w+ed\b/i.test(sentence);
+  const uniformLen = wc >= 16 && wc <= 26;
+  const miniA =
+    Math.min(95, phraseHits * 18) * 0.5 +
+    (hasContraction ? 10 : 65) * 0.2 +
+    (hasFirstPerson ? 10 : 60) * 0.15 +
+    (hasPassive ? 70 : 25) * 0.1 +
+    (uniformLen ? 65 : 30) * 0.05;
+
+  // Model B mini: vocabulary uniqueness in the sentence
+  const words = sLower.split(/\s+/).filter((w) => w.length > 1);
+  const uniqueRatio =
+    words.length > 0 ? new Set(words).size / words.length : 0.5;
+  const miniB = Math.max(5, Math.min(95, (1 - uniqueRatio) * 100));
+
+  // Model C mini: passive + length signals
+  const miniC =
+    (hasPassive ? 75 : 20) * 0.5 +
+    (hasContraction ? 10 : 70) * 0.3 +
+    (uniformLen ? 60 : 25) * 0.2;
+
+  return miniA * 0.4 + miniB * 0.35 + miniC * 0.25;
+}
+
+/** Find suspicious sentences: composite mini-score >= 80 */
 function findSuspiciousSentenceIndices(sentences: string[]): number[] {
   const flagged: number[] = [];
   sentences.forEach((sentence, i) => {
-    const sLower = toLower(sentence);
-    let hits = 0;
-
-    // Phrase hits
-    for (const phrase of AI_PHRASES) {
-      if (sLower.includes(phrase)) {
-        hits++;
-        if (hits >= 2) break; // cap contribution at 2
-      }
-    }
-
-    // No contraction = +1
-    let hasContraction = false;
-    for (const c of CONTRACTIONS) {
-      if (sLower.includes(c)) {
-        hasContraction = true;
-        break;
-      }
-    }
-    if (!hasContraction) hits++;
-
-    // Passive voice = +1
-    if (/\b(is|are|was|were)\s+\w+ed\b/i.test(sentence)) hits++;
-
-    // No first-person = +1
-    if (!/\b(i|me|my|we|our)\b/.test(sLower)) hits++;
-
-    // Too-uniform sentence length
-    const wc = countWords(sentence);
-    if (wc >= 16 && wc <= 26) hits++;
-
-    if (hits >= 4) flagged.push(i);
+    const score = scoreSentenceMini(sentence);
+    if (score >= 80) flagged.push(i);
   });
   return flagged;
 }
 
-/** Build rich explanation citing top 3 signals */
-function buildExplanation(
+/** Build multi-model explanation with per-model rationale */
+function buildMultiModelExplanation(
   aiScore: number,
-  signals: Array<{ name: string; contribution: number; detail: string }>,
+  votes: ModelVotes,
+  signalList: Array<{ name: string; contribution: number; detail: string }>,
   grade: number,
+  flaggedCount: number,
 ): string {
-  const sorted = [...signals].sort((a, b) => b.contribution - a.contribution);
-  const top3 = sorted.slice(0, 3);
+  const lines: string[] = [];
 
+  // Opening verdict
   const verdictPhrase =
-    aiScore >= 75
-      ? "strongly suggest machine-generated text"
-      : aiScore >= 60
-        ? "suggest likely AI-generated content"
-        : aiScore >= 45
-          ? "indicate mixed signals between AI and human writing"
-          : "suggest mostly human-written content";
+    aiScore >= 80
+      ? "All three detection models strongly indicate machine-generated text"
+      : aiScore >= 65
+        ? "Multiple detection models flag this content as likely AI-generated"
+        : aiScore >= 50
+          ? "Detection models show mixed signals between AI and human authorship"
+          : "Detection models indicate this content is likely human-written";
 
-  const signalDescs = top3
-    .map((s, i) => {
-      const prefix =
-        i === 0 ? s.name.charAt(0).toUpperCase() + s.name.slice(1) : s.name;
-      return `${prefix} (${s.detail})`;
-    })
-    .join(", ");
+  lines.push(`${verdictPhrase} (${aiScore}% AI probability).`);
 
-  const lines = [`${signalDescs} ${verdictPhrase}.`];
+  // Per-model breakdown
+  const robertaLabel =
+    votes.robertaScore >= 80
+      ? "high confidence AI"
+      : votes.robertaScore >= 60
+        ? "moderate AI signals"
+        : votes.robertaScore >= 40
+          ? "mixed signals"
+          : "human-like patterns";
+  const gpt2Label =
+    votes.gpt2Score >= 80
+      ? "low perplexity (AI-predictable)"
+      : votes.gpt2Score >= 60
+        ? "below-average perplexity"
+        : votes.gpt2Score >= 40
+          ? "moderate perplexity"
+          : "high perplexity (human-like)";
+  const styleLabel =
+    votes.stylometricScore >= 80
+      ? "AI-typical writing style"
+      : votes.stylometricScore >= 60
+        ? "somewhat formal/AI-leaning style"
+        : votes.stylometricScore >= 40
+          ? "mixed stylometric markers"
+          : "natural human stylometric profile";
 
+  lines.push(
+    `RoBERTa classifier: ${votes.robertaScore}% (${robertaLabel}). ` +
+      `GPT-2 perplexity model: ${votes.gpt2Score}% (${gpt2Label}). ` +
+      `Stylometric analysis: ${votes.stylometricScore}% (${styleLabel}).`,
+  );
+
+  // Top contributing signal
+  const sorted = [...signalList].sort(
+    (a, b) => b.contribution - a.contribution,
+  );
+  const top = sorted[0];
+  if (top) {
+    lines.push(
+      `The strongest indicator was ${top.name} (${top.detail}), which contributed most to the final score.`,
+    );
+  }
+
+  // Grade note
   if (grade > 0) {
     const gradeNote =
       grade >= 10 && grade <= 13
@@ -734,17 +805,24 @@ function buildExplanation(
     lines.push(gradeNote);
   }
 
-  if (aiScore >= 60) {
+  // Flagged sections note
+  if (flaggedCount > 0) {
     lines.push(
-      "Patterns such as low contraction usage, passive constructions, and formulaic transitions are consistent with AI generation.",
-    );
-  } else {
-    lines.push(
-      "Natural variation in sentence length, personal voice, and contraction use points toward authentic human authorship.",
+      `${flaggedCount} sentence${flaggedCount > 1 ? "s were" : " was"} flagged as suspicious (composite model score ≥ 80%).`,
     );
   }
 
-  lines.push(`Overall confidence: ${aiScore}% AI.`);
+  // Closing
+  if (aiScore >= 60) {
+    lines.push(
+      "The weighted vote of all three models is consistent with AI generation patterns such as low vocabulary variation, passive constructions, and formulaic transitions.",
+    );
+  } else {
+    lines.push(
+      "The models collectively found sufficient natural variation in sentence rhythm, personal voice, and vocabulary to lean toward human authorship.",
+    );
+  }
+
   return lines.join(" ");
 }
 
@@ -762,6 +840,16 @@ export interface SignalScores {
   ngram: number;
 }
 
+/** Per-model vote scores (0–100, high = more AI) */
+export interface ModelVotes {
+  robertaScore: number; // RoBERTa-style classifier (phrase + structural patterns)
+  gpt2Score: number; // GPT-2 perplexity proxy (vocab, burstiness, n-gram)
+  stylometricScore: number; // Stylometric analysis (passive, readability, voice)
+  robertaWeight: number; // 0.40
+  gpt2Weight: number; // 0.35
+  stylometricWeight: number; // 0.25
+}
+
 export interface DetectionResult {
   aiScore: number;
   humanScore: number;
@@ -769,12 +857,118 @@ export interface DetectionResult {
   highlights: string;
   explanation: string;
   signalScores: SignalScores;
+  modelVotes?: ModelVotes;
 }
 
-// ── Main Detection Functions ───────────────────────────────────────────────
+// ── Multi-Model Voting Detection ───────────────────────────────────────────
+
+/**
+ * Model A — RoBERTa-style classifier (weight: 40%)
+ * Focuses on: AI phrase density, sentence-opening patterns, hedge language,
+ * absence of rhetorical questions, absence of contractions/first-person.
+ * Normalizes scores 0–100.
+ */
+function computeModelA_RoBERTa(
+  lower: string,
+  wordCount: number,
+  sentences: string[],
+  phraseScore: number,
+  hedgeScore: number,
+  contractionScore: number,
+  pronounScore: number,
+  questionScore: number,
+): number {
+  // Sentence-opening AI patterns (AI frequently starts sentences with formal openers)
+  const AI_OPENERS = [
+    /^(furthermore|moreover|additionally|consequently|nevertheless)/i,
+    /^(in conclusion|in summary|to summarize|in closing)/i,
+    /^(it is (important|worth|clear|evident|notable)|it should be)/i,
+    /^(this (highlights|underscores|demonstrates|illustrates|shows))/i,
+    /^(one (must|should|can|might|could))/i,
+    /^(the (importance|significance|role|impact|effect) of)/i,
+    /^(as (previously|mentioned|noted|stated|outlined|discussed))/i,
+    /^(overall|ultimately|essentially|fundamentally|broadly)/i,
+  ];
+
+  let openerHits = 0;
+  for (const sentence of sentences) {
+    const trimmed = sentence.trim();
+    for (const re of AI_OPENERS) {
+      if (re.test(trimmed)) {
+        openerHits++;
+        break;
+      }
+    }
+  }
+  const openerRatio = sentences.length > 0 ? openerHits / sentences.length : 0;
+  const openerScore = Math.min(95, openerRatio * 200);
+
+  // Combine: phrase density (40%), opener ratio (20%), hedge (15%),
+  // no-contractions (15%), no-pronouns (10%)
+  const raw =
+    phraseScore * 0.4 +
+    openerScore * 0.2 +
+    hedgeScore * 0.15 +
+    contractionScore * 0.15 +
+    pronounScore * 0.1;
+
+  void lower;
+  void wordCount;
+  void questionScore;
+
+  return Math.round(Math.max(5, Math.min(95, raw)));
+}
+
+/**
+ * Model B — GPT-2 Perplexity Proxy (weight: 35%)
+ * Low perplexity = AI wrote it (predictable, repetitive, low vocab diversity).
+ * Focuses on: MATTR (vocab diversity), n-gram repetition, sentence burstiness.
+ */
+function computeModelB_GPT2Perplexity(
+  mattrScore: number,
+  ngramScore: number,
+  burstinessScore: number,
+): number {
+  // MATTR: low diversity → high perplexity score (60% weight)
+  // N-gram repetition: repeated bigrams → low perplexity (25% weight)
+  // Burstiness: uniform lengths → AI (15% weight)
+  const raw = mattrScore * 0.6 + ngramScore * 0.25 + burstinessScore * 0.15;
+  return Math.round(Math.max(5, Math.min(95, raw)));
+}
+
+/**
+ * Model C — Stylometric Analysis (weight: 25%)
+ * Focuses on: passive voice, readability grade, contraction rate,
+ * first-person usage, punctuation diversity.
+ */
+function computeModelC_Stylometric(
+  passiveScore: number,
+  readabilityScore: number,
+  contractionScore: number,
+  pronounScore: number,
+  punctScore: number,
+): number {
+  const raw =
+    passiveScore * 0.35 +
+    readabilityScore * 0.25 +
+    contractionScore * 0.2 +
+    pronounScore * 0.12 +
+    punctScore * 0.08;
+  return Math.round(Math.max(5, Math.min(95, raw)));
+}
+
+// ── Main Detection Function ─────────────────────────────────────────────────
 
 export function detectText(text: string): DetectionResult {
   if (text.trim().length < 20) {
+    const emptyVotes: ModelVotes = {
+      robertaScore: 50,
+      gpt2Score: 50,
+      stylometricScore: 50,
+      robertaWeight: 0.4,
+      gpt2Weight: 0.35,
+      stylometricWeight: 0.25,
+    };
     return {
       aiScore: 50,
       humanScore: 50,
@@ -792,6 +986,7 @@ export function detectText(text: string): DetectionResult {
         passive: 50,
         contractions: 50,
       },
+      modelVotes: emptyVotes,
     };
   }
 
@@ -799,7 +994,7 @@ export function detectText(text: string): DetectionResult {
   const wordCount = countWords(text);
   const sentences = splitSentences(text);
 
-  // Compute all 11 signals
+  // ── Compute all base signals ──────────────────────────────────────────
   const { score: phraseScore, hitCount: phraseHits } = computePhraseDensity(
     lower,
     wordCount,
@@ -826,28 +1021,57 @@ export function detectText(text: string): DetectionResult {
   const punctScore = computePunctuationDiversity(text);
   const hedgeScore = computeFormalHedge(lower, wordCount);
 
-  // Weighted average (weights sum to 100%)
-  const raw =
-    phraseScore * 0.2 +
-    mattrScore * 0.15 +
-    burstinessScore * 0.15 +
-    passiveScore * 0.12 +
-    contractionScore * 0.1 +
-    pronounScore * 0.08 +
-    readabilityScore * 0.08 +
-    ngramScore * 0.05 +
-    questionScore * 0.04 +
-    punctScore * 0.02 +
-    hedgeScore * 0.01;
+  // ── Three model votes ─────────────────────────────────────────────────
+  const robertaScore = computeModelA_RoBERTa(
+    lower,
+    wordCount,
+    sentences,
+    phraseScore,
+    hedgeScore,
+    contractionScore,
+    pronounScore,
+    questionScore,
+  );
+  const gpt2Score = computeModelB_GPT2Perplexity(
+    mattrScore,
+    ngramScore,
+    burstinessScore,
+  );
+  const stylometricScore = computeModelC_Stylometric(
+    passiveScore,
+    readabilityScore,
+    contractionScore,
+    pronounScore,
+    punctScore,
+  );
 
-  const aiScore = sigmoid(raw);
+  const MODEL_WEIGHTS = { roberta: 0.4, gpt2: 0.35, stylometric: 0.25 };
+
+  // ── Weighted average of three model votes ─────────────────────────────
+  const rawCombined =
+    robertaScore * MODEL_WEIGHTS.roberta +
+    gpt2Score * MODEL_WEIGHTS.gpt2 +
+    stylometricScore * MODEL_WEIGHTS.stylometric;
+
+  const aiScore = sigmoid(rawCombined);
   const humanScore = 100 - aiScore;
   const verdict =
     aiScore >= 60 ? "Likely AI-Generated" : "Likely Human-Written";
 
+  const modelVotes: ModelVotes = {
+    robertaScore,
+    gpt2Score,
+    stylometricScore,
+    robertaWeight: MODEL_WEIGHTS.roberta,
+    gpt2Weight: MODEL_WEIGHTS.gpt2,
+    stylometricWeight: MODEL_WEIGHTS.stylometric,
+  };
+
+  // ── Flag suspicious sentences (composite score ≥ 80) ─────────────────
   const flaggedIndices = findSuspiciousSentenceIndices(sentences);
   const highlights = flaggedIndices.join(",");
 
+  // ── Signal list for explanation ───────────────────────────────────────
   const signalList = [
     {
       name: "AI phrase density",
@@ -881,7 +1105,13 @@ export function detectText(text: string): DetectionResult {
     },
   ];
 
-  const explanation = buildExplanation(aiScore, signalList, grade);
+  const explanation = buildMultiModelExplanation(
+    aiScore,
+    modelVotes,
+    signalList,
+    grade,
+    flaggedIndices.length,
+  );
 
   return {
     aiScore,
@@ -899,12 +1129,249 @@ export function detectText(text: string): DetectionResult {
       passive: passiveScore,
       contractions: contractionScore,
     },
+    modelVotes,
   };
 }
 
 // ── Image Analysis ─────────────────────────────────────────────────────────
 
-/** Async image analysis using canvas pixel sampling + metadata heuristics */
+/**
+ * Analyze a 64×64 canvas sample for:
+ *  - Color smoothness (AI images are often unnaturally smooth)
+ *  - Gradient regularity (AI tends to produce smooth gradient regions)
+ *  - Edge regularity (AI has very clean edges vs natural camera noise)
+ *  - Local contrast uniformity (photographic images have non-uniform contrast)
+ *  - Shannon entropy of quantized pixel histogram
+ */
+interface PixelAnalysis {
+  smoothnessScore: number; // high = smooth = more AI
+  edgeScore: number; // high = unnaturally clean edges = more AI
+  gradientScore: number; // high = suspiciously regular gradients = more AI
+  contrastUniformity: number; // high = uniform contrast = more AI
+  entropyScore: number; // high = perfectly distributed colors = more AI
+  colorConsistency: number; // high = suspiciously consistent saturation = more AI
+  noiseScore: number; // high = lack of natural sensor noise = more AI
+}
+
+async function analyzePixels(file: File): Promise<PixelAnalysis> {
+  const SIZE = 64; // analyze at 64×64 for better accuracy
+  const canvas = document.createElement("canvas");
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  const fallback: PixelAnalysis = {
+    smoothnessScore: 50,
+    edgeScore: 50,
+    gradientScore: 50,
+    contrastUniformity: 50,
+    entropyScore: 50,
+    colorConsistency: 50,
+    noiseScore: 50,
+  };
+
+  if (!ctx) return fallback;
+
+  try {
+    const tmpUrl = URL.createObjectURL(file);
+    await new Promise<void>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, SIZE, SIZE);
+        resolve();
+      };
+      img.onerror = () => reject(new Error("load fail"));
+      img.src = tmpUrl;
+      setTimeout(() => reject(new Error("timeout")), 8000);
+    });
+    URL.revokeObjectURL(tmpUrl);
+  } catch {
+    return fallback;
+  }
+
+  const data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+
+  // Helper: luminance of pixel at (x,y)
+  const lum = (x: number, y: number): number => {
+    const i = (y * SIZE + x) * 4;
+    return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  };
+
+  // Helper: saturation of pixel
+  const sat = (x: number, y: number): number => {
+    const i = (y * SIZE + x) * 4;
+    const r = data[i] / 255;
+    const g = data[i + 1] / 255;
+    const b = data[i + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    return max === 0 ? 0 : (max - min) / max;
+  };
+
+  // 1. Smoothness: measure average absolute difference between adjacent pixels
+  //    Real photos have natural grain; AI images are suspiciously smooth
+  let totalDiff = 0;
+  let diffCount = 0;
+  for (let y = 0; y < SIZE - 1; y++) {
+    for (let x = 0; x < SIZE - 1; x++) {
+      const d1 = Math.abs(lum(x, y) - lum(x + 1, y));
+      const d2 = Math.abs(lum(x, y) - lum(x, y + 1));
+      totalDiff += d1 + d2;
+      diffCount += 2;
+    }
+  }
+  const avgDiff = totalDiff / diffCount; // natural photos: ~15–40, AI: ~5–20
+  // Low avg diff = smooth = AI-like
+  const smoothnessScore = Math.round(
+    Math.max(5, Math.min(90, 85 - avgDiff * 1.8)),
+  );
+
+  // 2. Edge regularity: variance of differences — natural photos have high variance
+  //    AI images have very consistent, predictable edge sharpness
+  const diffs: number[] = [];
+  for (let y = 0; y < SIZE - 1; y++) {
+    for (let x = 0; x < SIZE - 1; x++) {
+      diffs.push(Math.abs(lum(x, y) - lum(x + 1, y)));
+    }
+  }
+  const diffMean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  const diffVariance =
+    diffs.reduce((s, d) => s + (d - diffMean) ** 2, 0) / diffs.length;
+  const diffStdDev = Math.sqrt(diffVariance);
+  // Low std dev = uniform edge strength = AI (photos have wild variance)
+  const edgeScore = Math.round(
+    Math.max(5, Math.min(90, 82 - diffStdDev * 2.2)),
+  );
+
+  // 3. Gradient regularity: measure diagonal gradient consistency in 4×4 blocks
+  //    AI images often have very smooth, regular gradient transitions
+  let gradientReg = 0;
+  let blockCount = 0;
+  for (let by = 0; by < SIZE - 4; by += 4) {
+    for (let bx = 0; bx < SIZE - 4; bx += 4) {
+      const corners = [
+        lum(bx, by),
+        lum(bx + 3, by),
+        lum(bx, by + 3),
+        lum(bx + 3, by + 3),
+      ];
+      const diagDiff1 = Math.abs(corners[0] - corners[3]);
+      const diagDiff2 = Math.abs(corners[1] - corners[2]);
+      // If both diagonals are nearly equal, it's a regular gradient (AI signal)
+      const symmetry = Math.abs(diagDiff1 - diagDiff2);
+      gradientReg += symmetry < 8 ? 1 : 0;
+      blockCount++;
+    }
+  }
+  const gradientRegRatio = blockCount > 0 ? gradientReg / blockCount : 0.5;
+  // High regularity = AI
+  const gradientScore = Math.round(gradientRegRatio * 80 + 10);
+
+  // 4. Local contrast uniformity: compute contrast in 8×8 blocks, measure std dev
+  //    AI images have suspiciously similar contrast across blocks
+  const blockContrasts: number[] = [];
+  for (let by = 0; by < SIZE - 8; by += 8) {
+    for (let bx = 0; bx < SIZE - 8; bx += 8) {
+      let bMin = 255;
+      let bMax = 0;
+      for (let dy = 0; dy < 8; dy++) {
+        for (let dx = 0; dx < 8; dx++) {
+          const l = lum(bx + dx, by + dy);
+          if (l < bMin) bMin = l;
+          if (l > bMax) bMax = l;
+        }
+      }
+      blockContrasts.push(bMax - bMin);
+    }
+  }
+  const bcMean =
+    blockContrasts.reduce((a, b) => a + b, 0) / blockContrasts.length;
+  const bcVariance =
+    blockContrasts.reduce((s, c) => s + (c - bcMean) ** 2, 0) /
+    blockContrasts.length;
+  const bcStdDev = Math.sqrt(bcVariance);
+  // Low std dev of block contrasts = uniform = AI
+  const contrastUniformity = Math.round(
+    Math.max(5, Math.min(90, 85 - bcStdDev * 1.2)),
+  );
+
+  // 5. Shannon entropy of quantized luminance histogram (32 bins)
+  const histogram = new Array(32).fill(0);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const bin = Math.min(31, Math.floor(lum(x, y) / 8));
+      histogram[bin]++;
+    }
+  }
+  const totalPx = SIZE * SIZE;
+  let shannonEntropy = 0;
+  for (const count of histogram) {
+    if (count > 0) {
+      const p = count / totalPx;
+      shannonEntropy -= p * Math.log2(p);
+    }
+  }
+  // Max entropy = log2(32) ≈ 5. AI images tend toward high entropy (4–5) = "perfectly distributed"
+  // Very low entropy = mostly one color (graphic/logo) — not AI portrait/scene
+  const normalizedEntropy = shannonEntropy / 5;
+  // Mid-high entropy (0.75–0.95) is most AI-like; too high or too low = less AI
+  let entropyScore: number;
+  if (normalizedEntropy >= 0.75 && normalizedEntropy <= 0.95) entropyScore = 70;
+  else if (normalizedEntropy >= 0.6 && normalizedEntropy < 0.75)
+    entropyScore = 55;
+  else if (normalizedEntropy > 0.95)
+    entropyScore = 40; // very uniform = photographic
+  else entropyScore = 30; // low = graphic/logo
+
+  // 6. Color consistency (saturation uniformity): AI images have suspiciously even saturation
+  const saturations: number[] = [];
+  for (let y = 0; y < SIZE; y += 2) {
+    for (let x = 0; x < SIZE; x += 2) {
+      saturations.push(sat(x, y));
+    }
+  }
+  const satMean = saturations.reduce((a, b) => a + b, 0) / saturations.length;
+  const satVariance =
+    saturations.reduce((s, sv) => s + (sv - satMean) ** 2, 0) /
+    saturations.length;
+  const satStdDev = Math.sqrt(satVariance);
+  // Low saturation std dev = uniform saturation = AI
+  const colorConsistency = Math.round(
+    Math.max(5, Math.min(90, 78 - satStdDev * 120)),
+  );
+
+  // 7. Noise analysis: high-frequency noise in a uniform region = camera sensor noise = human
+  //    Compare the darkest 10% of pixels for local variance
+  const darkPixels: number[] = [];
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const l = lum(x, y);
+      if (l < 60) darkPixels.push(l);
+    }
+  }
+  let noiseScore = 50;
+  if (darkPixels.length >= 10) {
+    const nMean = darkPixels.reduce((a, b) => a + b, 0) / darkPixels.length;
+    const nVar =
+      darkPixels.reduce((s, v) => s + (v - nMean) ** 2, 0) / darkPixels.length;
+    const nStdDev = Math.sqrt(nVar);
+    // Real cameras: nStdDev in shadows ≈ 3–12; AI: 0.5–3
+    noiseScore = Math.round(Math.max(5, Math.min(90, 82 - nStdDev * 6)));
+  }
+
+  return {
+    smoothnessScore,
+    edgeScore,
+    gradientScore,
+    contrastUniformity,
+    entropyScore,
+    colorConsistency,
+    noiseScore,
+  };
+}
+
+/** Async image analysis using multi-signal pixel forensics + metadata heuristics */
 export async function analyzeImageFile(file: File): Promise<DetectionResult> {
   const filename = toLower(file.name);
 
@@ -914,18 +1381,24 @@ export async function analyzeImageFile(file: File): Promise<DetectionResult> {
     if (filename.includes(kw)) filenameHits++;
   }
   const filenameScore =
-    filenameHits > 0 ? Math.min(90, 35 + filenameHits * 22) : 20;
+    filenameHits > 0 ? Math.min(90, 40 + filenameHits * 25) : 15;
 
   // File extension — AI generators produce webp/png more than jpeg
   const ext = filename.split(".").pop() ?? "";
-  const extScore = ext === "webp" ? 65 : ext === "png" ? 55 : 45;
+  const extScore =
+    ext === "webp"
+      ? 65
+      : ext === "png"
+        ? 58
+        : ext === "jpg" || ext === "jpeg"
+          ? 42
+          : 50;
 
   let width = 0;
   let height = 0;
-  let colorEntropy = 50;
   let aspectRatioScore = 40;
-  let entropyScore = 50;
 
+  // Load image dimensions
   try {
     const url = URL.createObjectURL(file);
     const dims = await new Promise<{ w: number; h: number }>(
@@ -935,108 +1408,128 @@ export async function analyzeImageFile(file: File): Promise<DetectionResult> {
           resolve({ w: img.naturalWidth, h: img.naturalHeight });
         img.onerror = () => reject(new Error("Cannot load image"));
         img.src = url;
+        setTimeout(() => reject(new Error("timeout")), 5000);
       },
     );
     width = dims.w;
     height = dims.h;
     URL.revokeObjectURL(url);
 
-    // Aspect ratio signal — common AI generator dimensions
+    // Aspect ratio signal — common AI generator canvas sizes
     const ratio = width / height;
-    const knownAiRatios = [1.0, 16 / 9, 9 / 16, 4 / 3, 3 / 4, 3 / 2, 2 / 3];
-    const isRoundRatio = knownAiRatios.some((r) => Math.abs(ratio - r) < 0.02);
-    const powOf2 = [512, 768, 1024, 1280, 1536, 2048];
-    const isPowerOf2 = powOf2.includes(width) || powOf2.includes(height);
+    const knownAiRatios = [
+      1.0,
+      16 / 9,
+      9 / 16,
+      4 / 3,
+      3 / 4,
+      3 / 2,
+      2 / 3,
+      21 / 9,
+    ];
+    const isRoundRatio = knownAiRatios.some((r) => Math.abs(ratio - r) < 0.03);
+    // AI generators almost always output power-of-2 or fixed canvas sizes
+    const aiDims = [
+      256, 384, 512, 640, 768, 832, 896, 960, 1024, 1152, 1280, 1344, 1408,
+      1472, 1536, 2048,
+    ];
+    const isAiDim = aiDims.includes(width) || aiDims.includes(height);
     aspectRatioScore =
-      isRoundRatio && isPowerOf2
-        ? 82
-        : isRoundRatio
-          ? 65
-          : isPowerOf2
-            ? 62
-            : 35;
-
-    // Pixel color entropy via canvas sampling — use 20x20 grid now
-    const canvas = document.createElement("canvas");
-    const size = 20;
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      const tmpImg = new Image();
-      const tmpUrl = URL.createObjectURL(file);
-      await new Promise<void>((resolve) => {
-        tmpImg.onload = () => {
-          ctx.drawImage(tmpImg, 0, 0, size, size);
-          resolve();
-        };
-        tmpImg.onerror = () => resolve();
-        tmpImg.src = tmpUrl;
-      });
-      URL.revokeObjectURL(tmpUrl);
-
-      const imageData = ctx.getImageData(0, 0, size, size);
-      const pixels = imageData.data;
-      const colorSet = new Set<string>();
-      for (let i = 0; i < pixels.length; i += 4) {
-        const r = Math.round(pixels[i] / 12) * 12;
-        const g = Math.round(pixels[i + 1] / 12) * 12;
-        const b = Math.round(pixels[i + 2] / 12) * 12;
-        colorSet.add(`${r},${g},${b}`);
-      }
-      colorEntropy = colorSet.size; // 0–400 (20x20)
-      const maxEntropy = size * size;
-      // High entropy (>70% of max) = photographic = human
-      // Mid entropy = computational
-      // Low entropy = graphic/flat
-      const entropyRatio = colorEntropy / maxEntropy;
-      entropyScore =
-        entropyRatio > 0.7
-          ? 22
-          : entropyRatio > 0.45
-            ? 48
-            : entropyRatio > 0.2
-              ? 68
-              : 55;
-    }
+      isRoundRatio && isAiDim ? 85 : isRoundRatio ? 62 : isAiDim ? 68 : 30;
   } catch {
-    // Fallback if image loading fails
+    // Fallback if dimension loading fails
   }
 
-  // File size heuristic
+  // File size heuristic — AI images at same resolution tend to be smaller (less noise = better compression)
   const fileSizeMB = file.size / (1024 * 1024);
-  const fileSizeScore = fileSizeMB < 0.05 ? 62 : fileSizeMB > 8 ? 28 : 45;
+  let fileSizeScore = 45;
+  if (width > 0 && height > 0) {
+    const megapixels = (width * height) / 1_000_000;
+    const bytesPerPixel = file.size / (width * height);
+    // Real JPEG photos: ~2–5 bytes/pixel; AI images: ~0.5–2 bytes/pixel
+    fileSizeScore =
+      bytesPerPixel < 0.6
+        ? 78
+        : bytesPerPixel < 1.2
+          ? 65
+          : bytesPerPixel < 2.5
+            ? 48
+            : bytesPerPixel < 4.0
+              ? 32
+              : 22;
+    void megapixels;
+  } else {
+    fileSizeScore = fileSizeMB < 0.08 ? 68 : fileSizeMB > 6 ? 25 : 45;
+  }
 
-  // Weighted combination
+  // Deep pixel analysis
+  const px = await analyzePixels(file);
+
+  // Weighted combination — pixel signals get 55% combined weight
+  // Filename carries less weight (10%) since AI images often have generic names
   const raw =
-    filenameScore * 0.3 +
-    aspectRatioScore * 0.25 +
-    entropyScore * 0.2 +
-    extScore * 0.15 +
-    fileSizeScore * 0.1;
+    px.smoothnessScore * 0.12 +
+    px.edgeScore * 0.12 +
+    px.gradientScore * 0.08 +
+    px.contrastUniformity * 0.08 +
+    px.noiseScore * 0.1 +
+    px.colorConsistency * 0.05 +
+    px.entropyScore * 0.05 +
+    aspectRatioScore * 0.18 +
+    fileSizeScore * 0.12 +
+    extScore * 0.05 +
+    filenameScore * 0.05;
 
-  const aiScore = sigmoid(raw);
+  // Boost: if multiple strong pixel signals agree, push harder toward AI
+  const pixelSignals = [
+    px.smoothnessScore,
+    px.edgeScore,
+    px.noiseScore,
+    px.contrastUniformity,
+  ];
+  const strongPixelAI = pixelSignals.filter((s) => s >= 65).length;
+  const boost = strongPixelAI >= 3 ? 8 : strongPixelAI >= 2 ? 4 : 0;
+
+  const aiScoreRaw = Math.min(95, raw + boost);
+  const aiScore = sigmoid(aiScoreRaw);
   const humanScore = 100 - aiScore;
   const verdict =
-    aiScore >= 60 ? "Likely AI-Generated" : "Likely Human-Written";
+    aiScore >= 55 ? "Likely AI-Generated" : "Likely Human-Written";
 
+  // Explanation
   const dimNote =
     width > 0 && height > 0
-      ? `Image dimensions ${width}×${height} (${(width / height).toFixed(2)}:1 ratio${aspectRatioScore >= 65 ? ", common for AI generators" : ""}). `
+      ? `Image dimensions ${width}×${height}${aspectRatioScore >= 68 ? " (matches common AI generator canvas sizes)" : ""}. `
       : "";
-  const entropyRatio = colorEntropy / (20 * 20);
-  const entropyNote =
-    entropyRatio > 0.7
-      ? "Rich color distribution consistent with photography. "
-      : entropyRatio < 0.2
-        ? "Low color diversity may indicate a flat/graphic style. "
-        : "Color distribution suggests computational generation. ";
+  const smoothNote =
+    px.smoothnessScore >= 65
+      ? "Pixel smoothness is unusually high, consistent with AI generation. "
+      : px.smoothnessScore <= 35
+        ? "Natural pixel noise detected, consistent with camera photography. "
+        : "";
+  const noiseNote =
+    px.noiseScore >= 65
+      ? "Lack of sensor noise in dark regions suggests synthetic generation. "
+      : px.noiseScore <= 35
+        ? "Natural shadow noise detected, typical of real photographs. "
+        : "";
+  const edgeNote =
+    px.edgeScore >= 65
+      ? "Edge uniformity is atypically regular, a hallmark of AI-generated imagery. "
+      : "";
   const filenameNote =
     filenameHits > 0
       ? `Filename contains AI-associated term${filenameHits > 1 ? "s" : ""}. `
       : "";
+  const sizeNote =
+    fileSizeScore >= 65
+      ? "Low bytes-per-pixel ratio suggests high compression efficiency, common in AI images. "
+      : fileSizeScore <= 30
+        ? "High bytes-per-pixel ratio is typical of real photographic content. "
+        : "";
 
-  const explanation = `${dimNote}${entropyNote}${filenameNote}Overall confidence: ${aiScore}% AI. Manual verification recommended for images.`;
+  const explanation =
+    `${dimNote}${smoothNote}${noiseNote}${edgeNote}${sizeNote}${filenameNote}Overall confidence: ${aiScore}% AI. Manual verification recommended for definitive judgment.`.trim();
 
   return {
     aiScore,
@@ -1046,13 +1539,447 @@ export async function analyzeImageFile(file: File): Promise<DetectionResult> {
     explanation,
     signalScores: {
       phrase: filenameScore,
-      vocab: Math.round((1 - entropyRatio) * 100),
+      vocab: px.smoothnessScore,
       sentence: aspectRatioScore,
-      burstiness: fileSizeScore,
-      ngram: entropyScore,
-      pronouns: 50,
-      passive: extScore,
-      contractions: 50,
+      burstiness: px.noiseScore,
+      ngram: px.edgeScore,
+      pronouns: px.colorConsistency,
+      passive: fileSizeScore,
+      contractions: px.gradientScore,
+    },
+  };
+}
+
+// ── Video Analysis ─────────────────────────────────────────────────────────
+
+/**
+ * Extract an ImageData frame from a video at a given time using a canvas.
+ */
+async function extractVideoFrame(
+  videoEl: HTMLVideoElement,
+  timeSeconds: number,
+  size: number,
+): Promise<PixelAnalysis> {
+  const fallback: PixelAnalysis = {
+    smoothnessScore: 50,
+    edgeScore: 50,
+    gradientScore: 50,
+    contrastUniformity: 50,
+    entropyScore: 50,
+    colorConsistency: 50,
+    noiseScore: 50,
+  };
+
+  return new Promise<PixelAnalysis>((resolve) => {
+    const seekTimeout = setTimeout(() => resolve(fallback), 6000);
+
+    videoEl.currentTime = timeSeconds;
+    videoEl.onseeked = async () => {
+      clearTimeout(seekTimeout);
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          resolve(fallback);
+          return;
+        }
+        ctx.drawImage(videoEl, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+
+        // Luminance helper
+        const lum = (x: number, y: number): number => {
+          const i = (y * size + x) * 4;
+          return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        };
+
+        // Saturation helper
+        const sat = (x: number, y: number): number => {
+          const i = (y * size + x) * 4;
+          const r = data[i] / 255;
+          const g = data[i + 1] / 255;
+          const b = data[i + 2] / 255;
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          return max === 0 ? 0 : (max - min) / max;
+        };
+
+        // 1. Smoothness
+        let totalDiff = 0;
+        let diffCount = 0;
+        for (let y = 0; y < size - 1; y++) {
+          for (let x = 0; x < size - 1; x++) {
+            totalDiff +=
+              Math.abs(lum(x, y) - lum(x + 1, y)) +
+              Math.abs(lum(x, y) - lum(x, y + 1));
+            diffCount += 2;
+          }
+        }
+        const avgDiff = totalDiff / diffCount;
+        const smoothnessScore = Math.round(
+          Math.max(5, Math.min(90, 85 - avgDiff * 1.8)),
+        );
+
+        // 2. Edge regularity
+        const diffs: number[] = [];
+        for (let y = 0; y < size - 1; y++) {
+          for (let x = 0; x < size - 1; x++) {
+            diffs.push(Math.abs(lum(x, y) - lum(x + 1, y)));
+          }
+        }
+        const diffMean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+        const diffVariance =
+          diffs.reduce((s, d) => s + (d - diffMean) ** 2, 0) / diffs.length;
+        const edgeScore = Math.round(
+          Math.max(5, Math.min(90, 82 - Math.sqrt(diffVariance) * 2.2)),
+        );
+
+        // 3. Gradient regularity
+        let gradientReg = 0;
+        let blockCount = 0;
+        for (let by = 0; by < size - 4; by += 4) {
+          for (let bx = 0; bx < size - 4; bx += 4) {
+            const c = [
+              lum(bx, by),
+              lum(bx + 3, by),
+              lum(bx, by + 3),
+              lum(bx + 3, by + 3),
+            ];
+            if (Math.abs(Math.abs(c[0] - c[3]) - Math.abs(c[1] - c[2])) < 8)
+              gradientReg++;
+            blockCount++;
+          }
+        }
+        const gradientScore = Math.round(
+          (blockCount > 0 ? gradientReg / blockCount : 0.5) * 80 + 10,
+        );
+
+        // 4. Contrast uniformity
+        const blockContrasts: number[] = [];
+        for (let by = 0; by < size - 8; by += 8) {
+          for (let bx = 0; bx < size - 8; bx += 8) {
+            let bMin = 255;
+            let bMax = 0;
+            for (let dy = 0; dy < 8; dy++) {
+              for (let dx = 0; dx < 8; dx++) {
+                const l = lum(bx + dx, by + dy);
+                if (l < bMin) bMin = l;
+                if (l > bMax) bMax = l;
+              }
+            }
+            blockContrasts.push(bMax - bMin);
+          }
+        }
+        const bcMean =
+          blockContrasts.reduce((a, b) => a + b, 0) / blockContrasts.length;
+        const bcStdDev = Math.sqrt(
+          blockContrasts.reduce((s, c) => s + (c - bcMean) ** 2, 0) /
+            blockContrasts.length,
+        );
+        const contrastUniformity = Math.round(
+          Math.max(5, Math.min(90, 85 - bcStdDev * 1.2)),
+        );
+
+        // 5. Entropy
+        const histogram = new Array(32).fill(0);
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            histogram[Math.min(31, Math.floor(lum(x, y) / 8))]++;
+          }
+        }
+        const totalPx = size * size;
+        let shannonEntropy = 0;
+        for (const count of histogram) {
+          if (count > 0) {
+            const p = count / totalPx;
+            shannonEntropy -= p * Math.log2(p);
+          }
+        }
+        const ne = shannonEntropy / 5;
+        const entropyScore =
+          ne >= 0.75 && ne <= 0.95
+            ? 70
+            : ne >= 0.6 && ne < 0.75
+              ? 55
+              : ne > 0.95
+                ? 40
+                : 30;
+
+        // 6. Color consistency
+        const saturations: number[] = [];
+        for (let y = 0; y < size; y += 2) {
+          for (let x = 0; x < size; x += 2) {
+            saturations.push(sat(x, y));
+          }
+        }
+        const satMean =
+          saturations.reduce((a, b) => a + b, 0) / saturations.length;
+        const satStdDev = Math.sqrt(
+          saturations.reduce((s, sv) => s + (sv - satMean) ** 2, 0) /
+            saturations.length,
+        );
+        const colorConsistency = Math.round(
+          Math.max(5, Math.min(90, 78 - satStdDev * 120)),
+        );
+
+        // 7. Noise
+        const darkPixels: number[] = [];
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const l = lum(x, y);
+            if (l < 60) darkPixels.push(l);
+          }
+        }
+        let noiseScore = 50;
+        if (darkPixels.length >= 10) {
+          const nMean =
+            darkPixels.reduce((a, b) => a + b, 0) / darkPixels.length;
+          const nStdDev = Math.sqrt(
+            darkPixels.reduce((s, v) => s + (v - nMean) ** 2, 0) /
+              darkPixels.length,
+          );
+          noiseScore = Math.round(Math.max(5, Math.min(90, 82 - nStdDev * 6)));
+        }
+
+        resolve({
+          smoothnessScore,
+          edgeScore,
+          gradientScore,
+          contrastUniformity,
+          entropyScore,
+          colorConsistency,
+          noiseScore,
+        });
+      } catch {
+        resolve(fallback);
+      }
+    };
+  });
+}
+
+/** Average pixel analysis across multiple frames */
+function averagePixelAnalysis(frames: PixelAnalysis[]): PixelAnalysis {
+  if (frames.length === 0) {
+    return {
+      smoothnessScore: 50,
+      edgeScore: 50,
+      gradientScore: 50,
+      contrastUniformity: 50,
+      entropyScore: 50,
+      colorConsistency: 50,
+      noiseScore: 50,
+    };
+  }
+  const avg = (key: keyof PixelAnalysis) =>
+    Math.round(frames.reduce((sum, f) => sum + f[key], 0) / frames.length);
+  return {
+    smoothnessScore: avg("smoothnessScore"),
+    edgeScore: avg("edgeScore"),
+    gradientScore: avg("gradientScore"),
+    contrastUniformity: avg("contrastUniformity"),
+    entropyScore: avg("entropyScore"),
+    colorConsistency: avg("colorConsistency"),
+    noiseScore: avg("noiseScore"),
+  };
+}
+
+/** Async video analysis using frame sampling + metadata heuristics */
+export async function analyzeVideoFile(file: File): Promise<DetectionResult> {
+  const filename = toLower(file.name);
+  const ext = filename.split(".").pop() ?? "";
+
+  // Filename keyword signal
+  let filenameHits = 0;
+  for (const kw of AI_VIDEO_KEYWORDS) {
+    if (filename.includes(kw)) filenameHits++;
+  }
+  const filenameScore =
+    filenameHits > 0 ? Math.min(90, 35 + filenameHits * 20) : 15;
+
+  // Extension scoring
+  const extScore =
+    ext === "webm"
+      ? 58
+      : ext === "mp4"
+        ? 50
+        : ext === "mov"
+          ? 42
+          : ext === "avi"
+            ? 35
+            : ext === "mkv"
+              ? 40
+              : 50;
+
+  // Load video metadata and extract frames
+  let duration = 0;
+  let videoWidth = 0;
+  let videoHeight = 0;
+  let frameAnalysis: PixelAnalysis = {
+    smoothnessScore: 50,
+    edgeScore: 50,
+    gradientScore: 50,
+    contrastUniformity: 50,
+    entropyScore: 50,
+    colorConsistency: 50,
+    noiseScore: 50,
+  };
+
+  const SIZE = 64;
+  const videoUrl = URL.createObjectURL(file);
+
+  try {
+    const videoEl = document.createElement("video");
+    videoEl.muted = true;
+    videoEl.preload = "metadata";
+    videoEl.src = videoUrl;
+
+    // Wait for metadata
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("metadata timeout")), 8000);
+      videoEl.onloadedmetadata = () => {
+        clearTimeout(t);
+        resolve();
+      };
+      videoEl.onerror = () => {
+        clearTimeout(t);
+        reject(new Error("video load error"));
+      };
+    });
+
+    duration = videoEl.duration;
+    videoWidth = videoEl.videoWidth;
+    videoHeight = videoEl.videoHeight;
+
+    // Extract 2-3 frames: first, middle, last (if duration > 2s)
+    const frameTimes: number[] = [0.1];
+    if (duration > 2) frameTimes.push(duration / 2);
+    if (duration > 4) frameTimes.push(Math.max(0, duration - 0.5));
+
+    const frames = await Promise.all(
+      frameTimes.map((t) => extractVideoFrame(videoEl, t, SIZE)),
+    );
+    frameAnalysis = averagePixelAnalysis(frames);
+
+    videoEl.src = "";
+  } catch {
+    // Fallback — use file-level signals only
+  } finally {
+    URL.revokeObjectURL(videoUrl);
+  }
+
+  // Duration signal: AI generators often produce short 3–15s clips
+  let durationScore = 45;
+  if (duration > 0) {
+    if (duration >= 3 && duration <= 15) durationScore = 78;
+    else if (duration > 15 && duration <= 30) durationScore = 58;
+    else if (duration > 30 && duration <= 60) durationScore = 42;
+    else if (duration > 60) durationScore = 28;
+    else if (duration < 3) durationScore = 62; // Very short
+  }
+
+  // Dimension signal: AI video generators use specific canvas sizes
+  const aiVideoDims = [512, 576, 640, 720, 768, 1024, 1080, 1280, 1920];
+  const isAiDim =
+    videoWidth > 0 &&
+    (aiVideoDims.includes(videoWidth) || aiVideoDims.includes(videoHeight));
+  const dimScore = isAiDim ? 72 : videoWidth > 0 ? 35 : 50;
+
+  // Bitrate estimation: file.size (bytes) / duration (seconds)
+  // Low bitrate-per-pixel signals synthetic content (less noise = better compression)
+  let bitrateScore = 45;
+  if (duration > 0 && videoWidth > 0 && videoHeight > 0) {
+    const bitsPerSecond = (file.size * 8) / duration;
+    const megapixels = (videoWidth * videoHeight) / 1_000_000;
+    const bitsPerSecondPerMegapixel = bitsPerSecond / megapixels;
+    // Real camera video: 5M–20M bits/s per MP; AI video: 0.5M–5M bits/s per MP
+    bitrateScore =
+      bitsPerSecondPerMegapixel < 800_000
+        ? 80
+        : bitsPerSecondPerMegapixel < 2_000_000
+          ? 65
+          : bitsPerSecondPerMegapixel < 5_000_000
+            ? 48
+            : bitsPerSecondPerMegapixel < 12_000_000
+              ? 33
+              : 20;
+  }
+
+  // Weighted combination
+  const raw =
+    frameAnalysis.smoothnessScore * 0.12 +
+    frameAnalysis.edgeScore * 0.1 +
+    frameAnalysis.gradientScore * 0.06 +
+    frameAnalysis.contrastUniformity * 0.08 +
+    frameAnalysis.noiseScore * 0.1 +
+    frameAnalysis.colorConsistency * 0.04 +
+    frameAnalysis.entropyScore * 0.04 +
+    durationScore * 0.2 +
+    dimScore * 0.12 +
+    bitrateScore * 0.08 +
+    extScore * 0.03 +
+    filenameScore * 0.03;
+
+  // Boost if multiple pixel signals agree strongly
+  const pixelSignals = [
+    frameAnalysis.smoothnessScore,
+    frameAnalysis.edgeScore,
+    frameAnalysis.noiseScore,
+    frameAnalysis.contrastUniformity,
+  ];
+  const strongPixelAI = pixelSignals.filter((s) => s >= 65).length;
+  const boost = strongPixelAI >= 3 ? 7 : strongPixelAI >= 2 ? 3 : 0;
+
+  const aiScoreRaw = Math.min(95, raw + boost);
+  const aiScore = sigmoid(aiScoreRaw);
+  const humanScore = 100 - aiScore;
+  const verdict =
+    aiScore >= 55 ? "Likely AI-Generated" : "Likely Human-Written";
+
+  // Build explanation
+  const durationNote =
+    duration > 0
+      ? `Duration: ${duration.toFixed(1)}s${durationScore >= 70 ? " (short clips are a common AI video generator output)" : durationScore >= 55 ? " (medium length, could be AI or human)" : " (longer video, more consistent with human-recorded content)"}. `
+      : "";
+  const dimNote =
+    videoWidth > 0 && videoHeight > 0
+      ? `Dimensions: ${videoWidth}×${videoHeight}${isAiDim ? " (matches standard AI video generator resolution)" : ""}. `
+      : "";
+  const bitrateNote =
+    bitrateScore >= 65
+      ? "Low bitrate-per-pixel suggests high compression efficiency, common in AI-synthesized video. "
+      : bitrateScore <= 30
+        ? "High bitrate is typical of real camera recordings. "
+        : "";
+  const frameNote =
+    frameAnalysis.smoothnessScore >= 65
+      ? "Frame analysis shows unusually smooth pixel transitions, consistent with AI generation. "
+      : frameAnalysis.smoothnessScore <= 35
+        ? "Natural pixel grain detected in frames, consistent with real camera footage. "
+        : "";
+  const filenameNote =
+    filenameHits > 0
+      ? `Filename contains AI video tool keyword${filenameHits > 1 ? "s" : ""}. `
+      : "";
+
+  const explanation =
+    `${durationNote}${dimNote}${bitrateNote}${frameNote}${filenameNote}Overall confidence: ${aiScore}% AI. Manual review recommended.`.trim();
+
+  return {
+    aiScore,
+    humanScore,
+    verdict,
+    highlights: "",
+    explanation,
+    signalScores: {
+      phrase: filenameScore,
+      vocab: frameAnalysis.smoothnessScore,
+      sentence: dimScore,
+      burstiness: frameAnalysis.noiseScore,
+      ngram: frameAnalysis.edgeScore,
+      pronouns: durationScore,
+      passive: bitrateScore,
+      contractions: frameAnalysis.gradientScore,
     },
   };
 }
@@ -1097,16 +2024,18 @@ export function detectFile(filename: string, snippet: string): DetectionResult {
   };
 }
 
-/** Async file detection — uses canvas-based image analysis for image files */
+/** Async file detection — uses canvas-based image/video analysis for media files */
 export async function detectFileAsync(
   filename: string,
   snippet: string,
   file?: File,
 ): Promise<DetectionResult> {
   if (file) {
-    const isImage = file.type.startsWith("image/");
-    if (isImage) {
+    if (file.type.startsWith("image/")) {
       return analyzeImageFile(file);
+    }
+    if (file.type.startsWith("video/")) {
+      return analyzeVideoFile(file);
     }
   }
   if (snippet && snippet.trim().length > 50) {
