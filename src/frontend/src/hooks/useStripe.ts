@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isPermanentAdmin } from "../utils/permanentAdmin";
+import { getSecretParameter } from "../utils/urlParams";
 import { useActor } from "./useActor";
+import { useInternetIdentity } from "./useInternetIdentity";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,11 +101,16 @@ export function useIsStripeConfigured() {
     queryKey: ["stripeConfigured"],
     queryFn: async () => {
       if (!actor) return false;
-      const stripeActor = actor as unknown as StripeActor;
-      return stripeActor.isStripeConfigured();
+      try {
+        const stripeActor = actor as unknown as StripeActor;
+        return await stripeActor.isStripeConfigured();
+      } catch {
+        return false;
+      }
     },
     enabled: !!actor && !isFetching,
     staleTime: 30_000,
+    retry: false,
   });
 }
 
@@ -133,37 +141,91 @@ export function useSetStripeConfiguration() {
 
 export function useIsCallerAdmin() {
   const { actor, isFetching } = useActor();
+  const { identity } = useInternetIdentity();
+  const principalId = identity?.getPrincipal().toString();
+  const alwaysAdmin = isPermanentAdmin(principalId);
 
   return useQuery<boolean>({
-    queryKey: ["isCallerAdmin"],
+    queryKey: ["isCallerAdmin", principalId],
     queryFn: async () => {
+      if (alwaysAdmin) return true;
       if (!actor) return false;
-      return actor.isCallerAdmin();
+      try {
+        return await actor.isCallerAdmin();
+      } catch {
+        // Backend may trap "User is not registered" — treat as not admin
+        return false;
+      }
     },
-    enabled: !!actor && !isFetching,
+    enabled: alwaysAdmin || (!!actor && !isFetching),
     staleTime: 60_000,
+    retry: false,
+    // Seed the cache immediately for permanent admins so there's no loading flash
+    initialData: alwaysAdmin ? true : undefined,
   });
 }
 
 // ── useClaimAdminAccess ──────────────────────────────────────────────────────
 
+/** Poll until actor is ready, up to maxAttempts × intervalMs */
+async function waitForActor(
+  getState: () => { actor: StripeActor | null; isFetching: boolean },
+  maxAttempts = 5,
+  intervalMs = 1500,
+): Promise<StripeActor> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const { actor, isFetching } = getState();
+    if (actor && !isFetching) return actor as unknown as StripeActor;
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw new Error(
+    "Backend is taking too long to connect. Please refresh the page and try again.",
+  );
+}
+
 export function useClaimAdminAccess() {
-  const { actor, isFetching } = useActor();
+  const actorState = useActor();
+  const { identity } = useInternetIdentity();
   const queryClient = useQueryClient();
+
+  // Keep a ref-like object so waitForActor can read the latest state
+  const getState = () => ({
+    actor: actorState.actor as unknown as StripeActor | null,
+    isFetching: actorState.isFetching,
+  });
 
   return useMutation<void, Error, void>({
     mutationFn: async () => {
-      if (isFetching) {
-        throw new Error("Still connecting. Please try again.");
+      const principalId = identity?.getPrincipal().toString();
+      // Permanent admins don't need to claim — they always have access
+      if (isPermanentAdmin(principalId)) return;
+
+      const extActor = await waitForActor(getState);
+
+      // Use the URL/session token if available (same as actor init in useActor.ts)
+      const token = getSecretParameter("caffeineAdminToken") ?? "";
+      await extActor._initializeAccessControlWithSecret(token);
+
+      // Verify that admin was actually granted
+      let isAdmin = false;
+      try {
+        isAdmin = await extActor.isCallerAdmin();
+      } catch {
+        // Backend may trap if registration is still propagating — treat as false
+        isAdmin = false;
       }
-      if (!actor) {
-        throw new Error("Backend unavailable. Refresh the page.");
+
+      if (!isAdmin) {
+        throw new Error(
+          "Admin access could not be granted. If another user has already claimed admin, use the URL token method.",
+        );
       }
-      const extActor = actor as unknown as StripeActor;
-      await extActor._initializeAccessControlWithSecret("");
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["isCallerAdmin"] });
+      void queryClient.invalidateQueries({ queryKey: ["callerRole"] });
     },
   });
 }

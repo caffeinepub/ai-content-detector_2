@@ -13,18 +13,12 @@ import {
 
 import { toast } from "sonner";
 
-import { useActor } from "../hooks/useActor";
-import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import {
-  useClaimAdminAccess,
   useCreateCheckoutSession,
   useIsCallerAdmin,
   useIsStripeConfigured,
 } from "../hooks/useStripe";
-import {
-  StripeNotConfiguredBanner,
-  StripeSetupPanel,
-} from "./StripeSetupPanel";
+import { StripeSetupPanel } from "./StripeSetupPanel";
 
 type Plan = "free" | "pro" | "team";
 
@@ -117,80 +111,9 @@ const complianceItems = [
   },
 ];
 
-function AdminAccessPanel() {
-  const { identity } = useInternetIdentity();
-  const { isFetching: actorFetching } = useActor();
-  const isAuthenticated =
-    identity !== undefined && !identity.getPrincipal().isAnonymous();
-
-  const { data: isAdmin, isLoading: adminLoading } = useIsCallerAdmin();
-  const claimAdmin = useClaimAdminAccess();
-
-  // Don't render if not logged in, still loading, or already admin
-  if (!isAuthenticated || adminLoading || isAdmin) return null;
-
-  const isConnecting = actorFetching && !claimAdmin.isPending;
-  const isDisabled = claimAdmin.isPending || actorFetching;
-
-  const handleClaim = async () => {
-    try {
-      await claimAdmin.mutateAsync();
-      toast.success("Admin access granted! Admin controls are now visible.");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to claim admin access",
-      );
-    }
-  };
-
-  return (
-    <div
-      data-ocid="plans.admin_access.panel"
-      className="rounded-2xl border border-border bg-card p-5 flex items-center gap-4"
-    >
-      <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
-        <Shield className="h-5 w-5 text-muted-foreground" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-foreground">
-          Claim Admin Access
-        </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {isConnecting
-            ? "Connecting to backend, please wait…"
-            : "Log in to claim admin privileges for this app"}
-        </p>
-      </div>
-      <Button
-        data-ocid="plans.admin_access.primary_button"
-        onClick={() => void handleClaim()}
-        disabled={isDisabled}
-        className="font-semibold flex-shrink-0"
-      >
-        {claimAdmin.isPending ? (
-          <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            Claiming…
-          </>
-        ) : isConnecting ? (
-          <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            Connecting…
-          </>
-        ) : (
-          <>
-            <ShieldCheck className="h-4 w-4 mr-2" />
-            Claim Admin Access
-          </>
-        )}
-      </Button>
-    </div>
-  );
-}
-
 export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
-  const { data: isStripeConfigured, isLoading: stripeLoading } =
-    useIsStripeConfigured();
+  const { data: isStripeConfigured } = useIsStripeConfigured();
+  const { data: isAdmin } = useIsCallerAdmin();
   const createCheckoutSession = useCreateCheckoutSession();
 
   const handleUpgrade = async (plan: Plan) => {
@@ -264,20 +187,10 @@ export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
         </p>
       </div>
 
-      {/* Admin access claim panel (logged-in non-admins only) */}
-      <div className="max-w-4xl mx-auto">
-        <AdminAccessPanel />
-      </div>
-
-      {/* Admin Stripe setup panel */}
-      <div className="max-w-4xl mx-auto">
-        <StripeSetupPanel />
-      </div>
-
-      {/* Stripe not configured banner (non-admin view, only when not loading) */}
-      {!stripeLoading && isStripeConfigured === false && (
+      {/* Admin Stripe setup panel — only visible to admin */}
+      {isAdmin && (
         <div className="max-w-4xl mx-auto">
-          <StripeNotConfiguredBanner />
+          <StripeSetupPanel />
         </div>
       )}
 

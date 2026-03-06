@@ -37,7 +37,7 @@ export function DocumentAnalyzer({
   isQuotaReached,
   onAnalyze,
   isLoading,
-  isActorLoading = false,
+  isActorLoading: _isActorLoading = false,
   error,
   isAuthenticated,
   onLogin,
@@ -147,16 +147,14 @@ export function DocumentAnalyzer({
               <Button
                 data-ocid="detector.document_analyze_button"
                 onClick={handleAnalyze}
-                disabled={
-                  !file || isLoading || isActorLoading || isQuotaReached
-                }
+                disabled={!file || isLoading || isQuotaReached}
                 className="w-full gap-2 font-semibold bg-teal text-primary-foreground hover:bg-teal/90"
                 size="lg"
               >
-                {isActorLoading ? (
+                {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Connecting...
+                    Analyzing...
                   </>
                 ) : (
                   <>

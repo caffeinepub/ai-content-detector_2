@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { backendInterface } from "../backend";
 import type { UserProfile } from "../backend.d";
 import type { ScanRecord } from "../backend.d";
 import type { SignalScores } from "../utils/detector";
@@ -9,7 +10,28 @@ import {
   getCachedScores,
   removeCachedScore,
 } from "../utils/localScanCache";
+import { isPermanentAdmin } from "../utils/permanentAdmin";
 import { useActor } from "./useActor";
+import { useInternetIdentity } from "./useInternetIdentity";
+
+/** Poll until the actor is ready, up to maxAttempts × intervalMs */
+async function waitForActorReady(
+  getState: () => { actor: backendInterface | null; isFetching: boolean },
+  maxAttempts = 10,
+  intervalMs = 800,
+): Promise<backendInterface> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const { actor, isFetching } = getState();
+    if (actor && !isFetching) return actor;
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  // Last chance — if actor is available even while fetching, use it
+  const { actor } = getState();
+  if (actor) return actor;
+  throw new Error("__actor_unavailable__");
+}
 
 /** ScanRecord extended with per-signal scores (frontend only, not persisted to backend) */
 export interface EnrichedScanRecord extends ScanRecord {
@@ -182,23 +204,22 @@ export function useDailyCount(userId: string) {
 
 // ── useAnalyzeText ───────────────────────────────────────────────────────────
 export function useAnalyzeText(userId: string) {
-  const { actor, isFetching } = useActor();
+  const actorState = useActor();
   const queryClient = useQueryClient();
 
   return useMutation<EnrichedScanRecord, Error, { text: string }>({
     mutationFn: async ({ text }) => {
-      if (isFetching)
-        throw new Error(
-          "Still connecting to the backend. Please try again in a moment.",
-        );
-      if (!actor)
-        throw new Error(
-          "Backend connection unavailable. Please refresh the page.",
-        );
       const detection = detectText(text);
-      // Try to persist to backend, but fall back to a local record if the canister is unavailable.
       let record: import("../backend.d").ScanRecord;
+      let actor: backendInterface | null = null;
       try {
+        actor = await waitForActorReady(() => actorState);
+      } catch {
+        // Actor unavailable — fall back entirely to local analysis
+      }
+      // Try to persist to backend, but fall back to a local record if the canister is unavailable.
+      try {
+        if (!actor) throw new Error("no actor");
         record = await actor.analyzeText(userId, text);
       } catch {
         record = {
@@ -238,7 +259,7 @@ export function useAnalyzeText(userId: string) {
 
 // ── useAnalyzeFile ───────────────────────────────────────────────────────────
 export function useAnalyzeFile(userId: string) {
-  const { actor, isFetching } = useActor();
+  const actorState = useActor();
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -247,18 +268,17 @@ export function useAnalyzeFile(userId: string) {
     { contentType: string; filename: string; snippet: string; file?: File }
   >({
     mutationFn: async ({ contentType, filename, snippet, file }) => {
-      if (isFetching)
-        throw new Error(
-          "Still connecting to the backend. Please try again in a moment.",
-        );
-      if (!actor)
-        throw new Error(
-          "Backend connection unavailable. Please refresh the page.",
-        );
       const detection = await detectFileAsync(filename, snippet, file);
+      let actor: backendInterface | null = null;
+      try {
+        actor = await waitForActorReady(() => actorState);
+      } catch {
+        // Actor unavailable — fall back entirely to local analysis
+      }
       // Try to persist to backend, but don't fail if the canister is unavailable.
       let record: import("../backend.d").ScanRecord;
       try {
+        if (!actor) throw new Error("no actor");
         record = await actor.analyzeFile(
           userId,
           contentType,
@@ -304,19 +324,17 @@ export function useAnalyzeFile(userId: string) {
 
 // ── useClearHistory ──────────────────────────────────────────────────────────
 export function useClearHistory(userId: string) {
-  const { actor, isFetching } = useActor();
+  const actorState = useActor();
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, void>({
     mutationFn: async () => {
-      if (isFetching)
-        throw new Error(
-          "Still connecting to the backend. Please try again in a moment.",
-        );
-      if (!actor)
-        throw new Error(
-          "Backend connection unavailable. Please refresh the page.",
-        );
+      let actor: backendInterface | null = null;
+      try {
+        actor = await waitForActorReady(() => actorState);
+      } catch {
+        throw new Error("Backend unavailable. Please refresh and try again.");
+      }
       return actor.clearHistory(userId);
     },
     onSuccess: () => {
@@ -331,19 +349,17 @@ export function useClearHistory(userId: string) {
 
 // ── useDeleteScan ────────────────────────────────────────────────────────────
 export function useDeleteScan(userId: string) {
-  const { actor, isFetching } = useActor();
+  const actorState = useActor();
   const queryClient = useQueryClient();
 
   return useMutation<boolean, Error, { scanId: bigint }>({
     mutationFn: async ({ scanId }) => {
-      if (isFetching)
-        throw new Error(
-          "Still connecting to the backend. Please try again in a moment.",
-        );
-      if (!actor)
-        throw new Error(
-          "Backend connection unavailable. Please refresh the page.",
-        );
+      let actor: backendInterface | null = null;
+      try {
+        actor = await waitForActorReady(() => actorState);
+      } catch {
+        throw new Error("Backend unavailable. Please refresh and try again.");
+      }
       return actor.deleteScan(userId, scanId);
     },
     onSuccess: (_data, { scanId }) => {
@@ -359,26 +375,53 @@ export function useDeleteScan(userId: string) {
 // ── useCallerRole ─────────────────────────────────────────────────────────────
 export function useCallerRole() {
   const { actor, isFetching } = useActor();
+  const { identity } = useInternetIdentity();
+  const principalId = identity?.getPrincipal().toString();
+  const alwaysAdmin = isPermanentAdmin(principalId);
+
   return useQuery({
-    queryKey: ["callerRole"],
+    queryKey: ["callerRole", principalId],
     queryFn: async () => {
+      if (alwaysAdmin) return { admin: null };
       if (!actor) return "guest";
-      return actor.getCallerUserRole();
+      try {
+        return await actor.getCallerUserRole();
+      } catch {
+        // Backend may trap "User is not registered" — treat as guest
+        return "guest";
+      }
     },
-    enabled: !!actor && !isFetching,
+    enabled: alwaysAdmin || (!!actor && !isFetching),
+    retry: false,
+    initialData: alwaysAdmin ? { admin: null } : undefined,
   });
 }
 
 // ── useCallerIsAdmin ──────────────────────────────────────────────────────────
 export function useCallerIsAdmin() {
   const { actor, isFetching } = useActor();
+  const { identity } = useInternetIdentity();
+  const principalId = identity?.getPrincipal().toString();
+  const alwaysAdmin = isPermanentAdmin(principalId);
+
   return useQuery({
-    queryKey: ["callerIsAdmin"],
+    queryKey: ["callerIsAdmin", principalId],
     queryFn: async () => {
+      // Permanent admin always returns true regardless of backend
+      if (alwaysAdmin) return true;
       if (!actor) return false;
-      return actor.isCallerAdmin();
+      try {
+        return await actor.isCallerAdmin();
+      } catch {
+        // Backend may trap "User is not registered" — treat as not admin
+        return false;
+      }
     },
-    enabled: !!actor && !isFetching,
+    enabled: alwaysAdmin || (!!actor && !isFetching),
+    staleTime: 60_000,
+    retry: false,
+    // Seed the cache immediately for permanent admins so there's no loading flash
+    initialData: alwaysAdmin ? true : undefined,
   });
 }
 

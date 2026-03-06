@@ -134,12 +134,25 @@ export function ProfilePage({
   const handleCopyPrincipal = async () => {
     if (!principalStr) return;
     try {
-      await navigator.clipboard.writeText(principalStr);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(principalStr);
+      } else {
+        // Fallback for non-HTTPS or browsers without clipboard API
+        const textarea = document.createElement("textarea");
+        textarea.value = principalStr;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
       setCopied(true);
       toast.success("Principal ID copied to clipboard");
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error("Failed to copy");
+      toast.error("Failed to copy -- please select and copy the ID manually");
     }
   };
 
