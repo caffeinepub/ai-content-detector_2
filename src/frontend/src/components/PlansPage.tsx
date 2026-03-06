@@ -1,8 +1,25 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Check, Lock, Shield, ShieldCheck, Trash2, Zap } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  Lock,
+  Shield,
+  ShieldCheck,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { toast } from "sonner";
+
+import {
+  useCreateCheckoutSession,
+  useIsStripeConfigured,
+} from "../hooks/useStripe";
+import {
+  StripeNotConfiguredBanner,
+  StripeSetupPanel,
+} from "./StripeSetupPanel";
 
 type Plan = "free" | "pro" | "team";
 
@@ -17,6 +34,7 @@ const plans = [
     name: "Free",
     price: "$0",
     period: "/mo",
+    priceInCents: 0,
     description: "Perfect for trying out AI detection",
     features: [
       "5 scans per day",
@@ -33,6 +51,7 @@ const plans = [
     name: "Pro",
     price: "$19",
     period: "/mo",
+    priceInCents: 1900,
     description: "For professionals and power users",
     features: [
       "Unlimited scans",
@@ -52,6 +71,7 @@ const plans = [
     name: "Team",
     price: "$79",
     period: "/mo",
+    priceInCents: 7900,
     description: "For teams and organizations",
     features: [
       "Everything in Pro",
@@ -93,23 +113,67 @@ const complianceItems = [
 ];
 
 export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
-  const handleUpgrade = (plan: Plan) => {
-    onPlanChange(plan);
+  const { data: isStripeConfigured, isLoading: stripeLoading } =
+    useIsStripeConfigured();
+  const createCheckoutSession = useCreateCheckoutSession();
+
+  const handleUpgrade = async (plan: Plan) => {
     if (plan === currentPlan) {
       toast.info("You're already on this plan");
       return;
     }
+
+    // Downgrade to Free — no payment needed
     if (plan === "free") {
+      onPlanChange("free");
       toast.success("Downgraded to Free plan");
-    } else {
-      toast.success(
-        `Upgraded to ${plan === "pro" ? "Pro" : "Team"} plan! (Demo mode — no payment required)`,
+      return;
+    }
+
+    // Paid upgrade — require Stripe to be configured
+    if (!isStripeConfigured) {
+      toast.error(
+        "Payment processing is not yet configured. Contact support to upgrade.",
+      );
+      return;
+    }
+
+    const planMeta = plans.find((p) => p.id === plan);
+    if (!planMeta) return;
+
+    try {
+      const session = await createCheckoutSession.mutateAsync({
+        items: [
+          {
+            name: `AI Content Detector — ${planMeta.name} Plan`,
+            price: planMeta.priceInCents,
+            quantity: 1,
+          },
+        ],
+        planId: plan,
+      });
+
+      if (!session.url) {
+        toast.error("Payment session URL missing. Please try again.");
+        return;
+      }
+
+      window.location.href = session.url;
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Could not start checkout. Please try again.",
       );
     }
   };
 
+  const isPendingPlan = (planId: Plan) =>
+    createCheckoutSession.isPending &&
+    createCheckoutSession.variables?.planId === planId;
+
   return (
-    <div className="max-w-screen-xl mx-auto px-4 md:px-6 py-8 space-y-12">
+    <div className="max-w-screen-xl mx-auto px-4 md:px-6 py-8 space-y-8">
       {/* Header */}
       <div className="text-center space-y-3">
         <Badge className="bg-teal-muted text-teal border-0 font-semibold">
@@ -124,10 +188,23 @@ export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
         </p>
       </div>
 
+      {/* Admin Stripe setup panel */}
+      <div className="max-w-4xl mx-auto">
+        <StripeSetupPanel />
+      </div>
+
+      {/* Stripe not configured banner (non-admin view, only when not loading) */}
+      {!stripeLoading && isStripeConfigured === false && (
+        <div className="max-w-4xl mx-auto">
+          <StripeNotConfiguredBanner />
+        </div>
+      )}
+
       {/* Plans grid */}
       <div className="grid gap-6 md:grid-cols-3 max-w-4xl mx-auto">
         {plans.map((plan) => {
           const isCurrentPlan = currentPlan === plan.id;
+          const isPending = isPendingPlan(plan.id);
           const isDowngrade =
             (currentPlan === "pro" && plan.id === "free") ||
             (currentPlan === "team" && plan.id !== "team");
@@ -181,34 +258,125 @@ export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
               </div>
 
               {/* CTA */}
-              <Button
-                data-ocid={`plans.${plan.id}.primary_button`}
-                onClick={() => handleUpgrade(plan.id)}
-                disabled={isCurrentPlan}
-                className={cn(
-                  "w-full font-semibold",
-                  plan.highlight
-                    ? "bg-teal text-primary-foreground hover:bg-teal/90"
-                    : isCurrentPlan
+              {plan.id === "pro" ? (
+                <div className="relative">
+                  {isPending && (
+                    <div
+                      data-ocid="plans.pro.loading_state"
+                      className="absolute inset-0 flex items-center justify-center"
+                    />
+                  )}
+                  <Button
+                    data-ocid="plans.pro.checkout_button"
+                    onClick={() => void handleUpgrade(plan.id)}
+                    disabled={
+                      isCurrentPlan ||
+                      isPending ||
+                      createCheckoutSession.isPending
+                    }
+                    className={cn(
+                      "w-full font-semibold",
+                      plan.highlight
+                        ? "bg-teal text-primary-foreground hover:bg-teal/90"
+                        : isCurrentPlan
+                          ? "bg-muted text-muted-foreground cursor-default"
+                          : "",
+                    )}
+                    variant={plan.highlight ? "default" : "outline"}
+                  >
+                    {isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Redirecting…
+                      </>
+                    ) : isCurrentPlan ? (
+                      <>
+                        <Check className="h-4 w-4 mr-2" />
+                        Current Plan
+                      </>
+                    ) : isDowngrade ? (
+                      `Downgrade to ${plan.name}`
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        {plan.cta}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ) : plan.id === "team" ? (
+                <div className="relative">
+                  {isPending && (
+                    <div
+                      data-ocid="plans.team.loading_state"
+                      className="absolute inset-0 flex items-center justify-center"
+                    />
+                  )}
+                  <Button
+                    data-ocid="plans.team.checkout_button"
+                    onClick={() => void handleUpgrade(plan.id)}
+                    disabled={
+                      isCurrentPlan ||
+                      isPending ||
+                      createCheckoutSession.isPending
+                    }
+                    className={cn(
+                      "w-full font-semibold",
+                      isCurrentPlan
+                        ? "bg-muted text-muted-foreground cursor-default"
+                        : "",
+                    )}
+                    variant="outline"
+                  >
+                    {isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Redirecting…
+                      </>
+                    ) : isCurrentPlan ? (
+                      <>
+                        <Check className="h-4 w-4 mr-2" />
+                        Current Plan
+                      </>
+                    ) : isDowngrade ? (
+                      `Downgrade to ${plan.name}`
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        {plan.cta}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                /* Free plan */
+                <Button
+                  data-ocid={`plans.${plan.id}.primary_button`}
+                  onClick={() => void handleUpgrade(plan.id)}
+                  disabled={isCurrentPlan}
+                  className={cn(
+                    "w-full font-semibold",
+                    isCurrentPlan
                       ? "bg-muted text-muted-foreground cursor-default"
                       : "",
-                )}
-                variant={plan.highlight ? "default" : "outline"}
-              >
-                {isCurrentPlan ? (
-                  <>
-                    <Check className="h-4 w-4 mr-2" />
-                    Current Plan
-                  </>
-                ) : isDowngrade ? (
-                  `Downgrade to ${plan.name}`
-                ) : (
-                  <>
-                    <Zap className="h-4 w-4 mr-2" />
-                    {plan.cta}
-                  </>
-                )}
-              </Button>
+                  )}
+                  variant="outline"
+                >
+                  {isCurrentPlan ? (
+                    <>
+                      <Check className="h-4 w-4 mr-2" />
+                      Current Plan
+                    </>
+                  ) : isDowngrade ? (
+                    `Downgrade to ${plan.name}`
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4 mr-2" />
+                      {plan.cta}
+                    </>
+                  )}
+                </Button>
+              )}
 
               {/* Features */}
               <div className="space-y-2.5">
@@ -255,7 +423,6 @@ export function PlansPage({ currentPlan, onPlanChange }: PlansPageProps) {
             {complianceItems.map((item) => (
               <div
                 key={item.title}
-                data-ocid={`plans.compliance_${item.title.toLowerCase().replace(/\s+/g, "_")}.card`}
                 className="flex items-start gap-3 rounded-lg border border-border bg-background/50 p-3.5"
               >
                 <div className="flex-shrink-0 mt-0.5">{item.icon}</div>

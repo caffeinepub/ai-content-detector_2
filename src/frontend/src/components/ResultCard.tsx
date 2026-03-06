@@ -12,6 +12,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import type { EnrichedScanRecord } from "../hooks/useQueries";
+import type { SignalScores } from "../utils/detector";
 import { buildHighlightedSegments } from "../utils/highlight";
 
 interface ResultCardProps {
@@ -121,13 +122,13 @@ export function ResultCard({
       isAiSignal: true, // high = more AI
     },
     {
-      label: "Vocab Diversity",
+      label: "Vocab Variation",
       value: 100 - signalScores.vocab,
-      isAiSignal: false, // high = more human
+      isAiSignal: false, // high = more human (low MATTR = AI)
     },
     {
-      label: "Sentence Uniformity",
-      value: signalScores.sentence,
+      label: "Passive Voice",
+      value: (signalScores as SignalScores).passive ?? signalScores.sentence,
       isAiSignal: true, // high = more AI
     },
     {
@@ -136,9 +137,11 @@ export function ResultCard({
       isAiSignal: false, // high = more human
     },
     {
-      label: "Phrase Repetition",
-      value: signalScores.ngram,
-      isAiSignal: true, // high = more AI
+      label: "Contraction Use",
+      value:
+        100 -
+        ((signalScores as SignalScores).contractions ?? signalScores.ngram),
+      isAiSignal: false, // high = more human (low contractions = AI)
     },
     {
       label: "Personal Voice",
@@ -166,10 +169,10 @@ export function ResultCard({
       "SIGNAL BREAKDOWN",
       "----------------",
       `AI Phrase Density: ${signalScores.phrase}%`,
-      `Vocabulary Diversity (human): ${100 - signalScores.vocab}%`,
-      `Sentence Uniformity: ${signalScores.sentence}%`,
+      `Vocabulary Variation (human): ${100 - signalScores.vocab}%`,
+      `Passive Voice: ${(signalScores as SignalScores).passive ?? signalScores.sentence}%`,
       `Writing Burstiness (human): ${100 - signalScores.burstiness}%`,
-      `Phrase Repetition: ${signalScores.ngram}%`,
+      `Contraction Use (human): ${100 - ((signalScores as SignalScores).contractions ?? signalScores.ngram)}%`,
       `Personal Voice (human): ${100 - signalScores.pronouns}%`,
       "",
       "ANALYSIS SUMMARY",

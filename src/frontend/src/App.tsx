@@ -1,5 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { AnalyzePage } from "./components/AnalyzePage";
@@ -39,6 +39,34 @@ function DetectorApp() {
   const [page, setPage] = useState<Page>("dashboard");
   const [plan, setPlan] = useState<Plan>(getStoredPlan);
   const [deletingId, setDeletingId] = useState<bigint | null>(null);
+
+  // Handle Stripe payment redirect callbacks
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get("payment");
+    const planParam = params.get("plan");
+
+    if (paymentStatus === "success") {
+      if (planParam === "pro" || planParam === "team") {
+        const newPlan = planParam as Plan;
+        setPlan(newPlan);
+        localStorage.setItem("aidetector_plan", newPlan);
+        toast.success(
+          `You're now on the ${newPlan === "pro" ? "Pro" : "Team"} plan!`,
+          { duration: 5000 },
+        );
+      }
+    } else if (paymentStatus === "cancel") {
+      toast.info("Payment cancelled");
+    }
+
+    // Clean URL params after handling
+    if (paymentStatus) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    // Run only once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const DAILY_QUOTA = plan === "free" ? 5 : Number.POSITIVE_INFINITY;
 
