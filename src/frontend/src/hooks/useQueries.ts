@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { UserProfile } from "../backend.d";
 import type { ScanRecord } from "../backend.d";
 import type { SignalScores } from "../utils/detector";
 import { detectFileAsync, detectText } from "../utils/detector";
@@ -351,6 +352,61 @@ export function useDeleteScan(userId: string) {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.history(userId),
       });
+    },
+  });
+}
+
+// ── useCallerRole ─────────────────────────────────────────────────────────────
+export function useCallerRole() {
+  const { actor, isFetching } = useActor();
+  return useQuery({
+    queryKey: ["callerRole"],
+    queryFn: async () => {
+      if (!actor) return "guest";
+      return actor.getCallerUserRole();
+    },
+    enabled: !!actor && !isFetching,
+  });
+}
+
+// ── useCallerIsAdmin ──────────────────────────────────────────────────────────
+export function useCallerIsAdmin() {
+  const { actor, isFetching } = useActor();
+  return useQuery({
+    queryKey: ["callerIsAdmin"],
+    queryFn: async () => {
+      if (!actor) return false;
+      return actor.isCallerAdmin();
+    },
+    enabled: !!actor && !isFetching,
+  });
+}
+
+// ── useCallerProfile ──────────────────────────────────────────────────────────
+export function useCallerProfile() {
+  const { actor, isFetching } = useActor();
+  return useQuery<UserProfile | null>({
+    queryKey: ["callerProfile"],
+    queryFn: async () => {
+      if (!actor) return null;
+      return actor.getCallerUserProfile();
+    },
+    enabled: !!actor && !isFetching,
+  });
+}
+
+// ── useSaveProfile ────────────────────────────────────────────────────────────
+export function useSaveProfile() {
+  const { actor, isFetching } = useActor();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (profile: { name: string }) => {
+      if (isFetching) throw new Error("Still connecting.");
+      if (!actor) throw new Error("Backend unavailable.");
+      return actor.saveCallerUserProfile(profile);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["callerProfile"] });
     },
   });
 }

@@ -35,6 +35,7 @@ interface AnalyzePageProps {
   isClearingAll?: boolean;
   isAuthenticated: boolean;
   onLogin: () => void;
+  onNavigateProfile?: () => void;
 }
 
 export function AnalyzePage({
@@ -58,6 +59,7 @@ export function AnalyzePage({
   isClearingAll,
   isAuthenticated,
   onLogin,
+  onNavigateProfile,
 }: AnalyzePageProps) {
   return (
     <div className="flex">
@@ -146,6 +148,7 @@ export function AnalyzePage({
                 isLoading={isTextLoading}
                 isActorLoading={isActorLoading}
                 error={textError}
+                onNavigateProfile={onNavigateProfile}
               />
             </TabsContent>
 
@@ -159,6 +162,7 @@ export function AnalyzePage({
                 error={fileError}
                 isAuthenticated={isAuthenticated}
                 onLogin={onLogin}
+                onNavigateProfile={onNavigateProfile}
               />
             </TabsContent>
 
@@ -172,6 +176,7 @@ export function AnalyzePage({
                 error={fileError}
                 isAuthenticated={isAuthenticated}
                 onLogin={onLogin}
+                onNavigateProfile={onNavigateProfile}
               />
             </TabsContent>
           </Tabs>

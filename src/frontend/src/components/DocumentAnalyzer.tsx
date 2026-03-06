@@ -29,6 +29,7 @@ interface DocumentAnalyzerProps {
   error: Error | null;
   isAuthenticated: boolean;
   onLogin: () => void;
+  onNavigateProfile?: () => void;
 }
 
 export function DocumentAnalyzer({
@@ -40,6 +41,7 @@ export function DocumentAnalyzer({
   error,
   isAuthenticated,
   onLogin,
+  onNavigateProfile,
 }: DocumentAnalyzerProps) {
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<EnrichedScanRecord | null>(null);
@@ -120,9 +122,25 @@ export function DocumentAnalyzer({
               />
 
               {(error || readError) && (
-                <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                  <span>{readError ?? error?.message}</span>
+                <div
+                  data-ocid="detector.backend_error_state"
+                  className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+                >
+                  <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span>{readError ?? error?.message}</span>
+                  </div>
+                  {onNavigateProfile &&
+                    (error?.message.includes("unavailable") ?? false) && (
+                      <button
+                        type="button"
+                        data-ocid="detector.go_to_profile_button"
+                        onClick={onNavigateProfile}
+                        className="ml-2 text-xs font-semibold underline text-destructive/80 hover:text-destructive whitespace-nowrap"
+                      >
+                        Go to Profile
+                      </button>
+                    )}
                 </div>
               )}
 

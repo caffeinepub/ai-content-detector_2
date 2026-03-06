@@ -16,11 +16,12 @@ import {
   Moon,
   ScanSearch,
   Sun,
+  User,
   Zap,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 
-export type Page = "dashboard" | "analyze" | "plans" | "api";
+export type Page = "dashboard" | "analyze" | "plans" | "api" | "profile";
 
 interface TopNavProps {
   currentPage: Page;
@@ -70,7 +71,12 @@ export function TopNav({
     ? `${principalStr.slice(0, 5)}...${principalStr.slice(-3)}`
     : "";
 
-  const navLinks: { label: string; page: Page; icon?: React.ReactNode }[] = [
+  const navLinks: {
+    label: string;
+    page: Page;
+    icon?: React.ReactNode;
+    authOnly?: boolean;
+  }[] = [
     { label: "Dashboard", page: "dashboard" },
     { label: "Analyze", page: "analyze" },
     { label: "Plans", page: "plans" },
@@ -189,6 +195,14 @@ export function TopNav({
                 className="w-44"
               >
                 <DropdownMenuItem
+                  data-ocid="nav.profile_link"
+                  onClick={() => onNavigate("profile")}
+                  className="gap-2 text-xs cursor-pointer"
+                >
+                  <User className="h-3.5 w-3.5 text-teal" />
+                  My Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   data-ocid="nav.upgrade_link"
                   onClick={() => onNavigate("plans")}
                   className="gap-2 text-xs cursor-pointer"
@@ -271,6 +285,19 @@ export function TopNav({
                   {link.label}
                 </DropdownMenuItem>
               ))}
+              {isAuthenticated && (
+                <DropdownMenuItem
+                  data-ocid="nav.profile_link"
+                  onClick={() => onNavigate("profile")}
+                  className={cn(
+                    "gap-2 text-sm cursor-pointer",
+                    currentPage === "profile" && "text-teal font-semibold",
+                  )}
+                >
+                  <User className="h-3.5 w-3.5" />
+                  Profile
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

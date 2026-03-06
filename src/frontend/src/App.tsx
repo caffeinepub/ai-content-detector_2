@@ -6,6 +6,7 @@ import { AnalyzePage } from "./components/AnalyzePage";
 import { ApiPage } from "./components/ApiPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { PlansPage } from "./components/PlansPage";
+import { ProfilePage } from "./components/ProfilePage";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { type Page, TopNav } from "./components/TopNav";
 
@@ -185,6 +186,7 @@ function DetectorApp() {
             isClearingAll={clearHistoryMutation.isPending}
             isAuthenticated={isAuthenticated}
             onLogin={handleLogin}
+            onNavigateProfile={() => setPage("profile")}
           />
         )}
 
@@ -194,6 +196,19 @@ function DetectorApp() {
 
         {page === "api" && (
           <ApiPage plan={plan} onNavigatePlans={() => setPage("plans")} />
+        )}
+
+        {page === "profile" && (
+          <ProfilePage
+            identity={identity}
+            plan={plan}
+            isAuthenticated={isAuthenticated}
+            onLogout={handleLogout}
+            onNavigatePlans={() => setPage("plans")}
+            userId={userId}
+            dailyCount={dailyCount}
+            history={history}
+          />
         )}
       </main>
 

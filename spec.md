@@ -1,40 +1,49 @@
 # AI Content Detector
 
 ## Current State
+The app has 4 pages: Dashboard, Analyze, Plans, API. The Analyze page contains TextAnalyzer, ImageAnalyzer, and DocumentAnalyzer components. When the backend actor is unavailable, error messages in these analyzers show "Backend connection unavailable. Please refresh the page." as plain text -- no actionable navigation button. There is no user profile/information page.
 
-- Full SaaS app with Text/Image/Document analysis, Dashboard, Plans page, and API page.
-- Plans page (`PlansPage.tsx`) shows Free ($0), Pro ($19/mo), Team ($79/mo) tiers.
-- Plan upgrades are simulated: clicking "Upgrade to Pro" just sets a localStorage flag with a toast saying "Demo mode — no payment required".
-- No real payment processing exists. Plan state is stored in localStorage only.
-- Backend (`backend.d.ts`) has user profile, scan history, roles, and daily quota APIs but no subscription/payment APIs.
+The `backend.d.ts` exposes:
+- `getCallerUserProfile()` → `UserProfile | null`
+- `saveCallerUserProfile(profile)` → void
+- `getCallerUserRole()` → `UserRole`
+- `isCallerAdmin()` → boolean
+- `getHistory(userId)` → `ScanRecord[]`
+- `getDailyCount(userId)` → bigint
 
 ## Requested Changes (Diff)
 
 ### Add
-- Stripe payment integration component (via Caffeine `stripe` component).
-- Backend subscription management: store user subscription tier (free/pro/team), Stripe customer ID, and subscription status.
-- `getUserSubscription` and `setUserSubscription` backend APIs.
-- A Stripe checkout flow triggered from the Plans page when user clicks "Upgrade to Pro" or "Upgrade to Team".
-- A payment success/cancel redirect handler that updates the user's plan in the backend.
-- A "Manage Subscription" / "Cancel Plan" button for Pro and Team plan holders.
-- Display active subscription status badge on Plans page (live from backend).
+- New `ProfilePage` component (`src/frontend/src/components/ProfilePage.tsx`) showing:
+  - User's Internet Identity principal (full + truncated copy button)
+  - Display name (editable via `saveCallerUserProfile`)
+  - Current plan badge (Free/Pro/Team)
+  - User role badge (admin/user/guest)
+  - Total scans count (derived from history length)
+  - Daily scans used today (from `getDailyCount`)
+  - Account created indicator
+  - Scan quota usage bar
+  - Sign out button
+- New `"profile"` page type added to `Page` union in `TopNav.tsx`
+- Profile nav link in the top nav (desktop + mobile dropdown)
+- User avatar in nav dropdown now has a "My Profile" menu item navigating to `"profile"` page
+- In `App.tsx`: render `ProfilePage` when `page === "profile"`, pass required props (identity, plan, isAuthenticated, onLogout, onNavigatePlans)
+- `useProfile` hook in `useQueries.ts` to fetch `getCallerUserProfile()` and `getCallerUserRole()` and `isCallerAdmin()`
 
 ### Modify
-- `PlansPage.tsx`: Replace the mock `handleUpgrade` with real Stripe checkout calls. Show a loading state during checkout redirect. Show "Manage Subscription" for active paid plans.
-- `App.tsx`: Load plan from backend subscription state (not just localStorage) when authenticated. Keep localStorage as fallback for anonymous/unauthenticated users.
-- Backend: Add subscription record storage keyed by principal. Expose methods to get and set subscription tier.
+- `TextAnalyzer`, `ImageAnalyzer`, `DocumentAnalyzer`: when the error message is "Backend connection unavailable. Please refresh the page.", show an additional "Go to Profile" button next to the error that navigates to the profile page. Add `onNavigateProfile?: () => void` prop to each analyzer.
+- `AnalyzePage`: accept and forward `onNavigateProfile` prop to the three analyzers.
+- `App.tsx`: pass `onNavigateProfile={() => setPage("profile")}` to `AnalyzePage`.
+- `TopNav`: add `"profile"` to `Page` type; add Profile link in nav and in user dropdown.
 
 ### Remove
-- The "(Demo mode — no payment required)" toast message.
-- localStorage-only plan management for authenticated users.
+- Nothing removed.
 
 ## Implementation Plan
-
-1. Select Stripe Caffeine component.
-2. Regenerate Motoko backend with subscription management: store `SubscriptionRecord` (tier, stripeCustomerId, status, updatedAt) keyed by principal. Expose `getUserSubscription`, `setUserSubscription` query/update methods.
-3. Update frontend:
-   - Add `useUserSubscription` and `useSetUserSubscription` hooks.
-   - Wire Stripe checkout on "Upgrade" button clicks using the Stripe component's `createCheckoutSession` utility.
-   - On successful return from Stripe (URL param `?payment=success`), call `setUserSubscription` to persist new plan tier.
-   - On Plans page, show real subscription badge and "Manage Subscription" button for paid plans.
-   - In `App.tsx`, initialize plan from backend subscription when authenticated, fall back to localStorage for anonymous users.
+1. Add `"profile"` to the `Page` type in `TopNav.tsx`
+2. Add Profile nav entry in desktop nav and mobile dropdown in `TopNav.tsx`; add "My Profile" item in user dropdown menu
+3. Create `ProfilePage.tsx` with user info display (principal, name edit, plan, role, scan stats, quota bar, sign out)
+4. Add `useProfile` query hook in `useQueries.ts` using `getCallerUserProfile`, `getCallerUserRole`, `isCallerAdmin`
+5. Update `TextAnalyzer`, `ImageAnalyzer`, `DocumentAnalyzer` to accept `onNavigateProfile` prop and show a "Go to Profile" button alongside the backend-unavailable error
+6. Update `AnalyzePage` to accept and pass `onNavigateProfile`
+7. Update `App.tsx`: add profile page render, pass `onNavigateProfile` to `AnalyzePage`, pass required props to `ProfilePage`

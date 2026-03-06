@@ -15,6 +15,7 @@ interface TextAnalyzerProps {
   isLoading: boolean;
   isActorLoading?: boolean;
   error: Error | null;
+  onNavigateProfile?: () => void;
 }
 
 export function TextAnalyzer({
@@ -24,6 +25,7 @@ export function TextAnalyzer({
   isLoading,
   isActorLoading = false,
   error,
+  onNavigateProfile,
 }: TextAnalyzerProps) {
   const [text, setText] = useState("");
   const [result, setResult] = useState<EnrichedScanRecord | null>(null);
@@ -87,10 +89,22 @@ export function TextAnalyzer({
             {error && (
               <div
                 data-ocid="detector.result_loading_state"
-                className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+                className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
               >
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                <span>{error.message}</span>
+                <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <span>{error.message}</span>
+                </div>
+                {onNavigateProfile && error.message.includes("unavailable") && (
+                  <button
+                    type="button"
+                    data-ocid="detector.go_to_profile_button"
+                    onClick={onNavigateProfile}
+                    className="ml-2 text-xs font-semibold underline text-destructive/80 hover:text-destructive whitespace-nowrap"
+                  >
+                    Go to Profile
+                  </button>
+                )}
               </div>
             )}
 

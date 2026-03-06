@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActor } from "./useActor";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -20,8 +20,8 @@ export interface StripeConfiguration {
 }
 
 /**
- * Extended actor type that includes Stripe methods not present in the
- * generated backendInterface (added by the Stripe component).
+ * Extended actor type that includes Stripe methods and admin control methods
+ * not present in the generated backendInterface (added by the Stripe/ACL component).
  */
 interface StripeActor {
   createCheckoutSession(
@@ -32,6 +32,7 @@ interface StripeActor {
   isStripeConfigured(): Promise<boolean>;
   setStripeConfiguration(config: StripeConfiguration): Promise<void>;
   isCallerAdmin(): Promise<boolean>;
+  _initializeAccessControlWithSecret(token: string): Promise<void>;
 }
 
 // ── useCreateCheckoutSession ─────────────────────────────────────────────────
@@ -141,5 +142,28 @@ export function useIsCallerAdmin() {
     },
     enabled: !!actor && !isFetching,
     staleTime: 60_000,
+  });
+}
+
+// ── useClaimAdminAccess ──────────────────────────────────────────────────────
+
+export function useClaimAdminAccess() {
+  const { actor, isFetching } = useActor();
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      if (isFetching) {
+        throw new Error("Still connecting. Please try again.");
+      }
+      if (!actor) {
+        throw new Error("Backend unavailable. Refresh the page.");
+      }
+      const extActor = actor as unknown as StripeActor;
+      await extActor._initializeAccessControlWithSecret("");
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["isCallerAdmin"] });
+    },
   });
 }
